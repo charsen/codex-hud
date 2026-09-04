@@ -325,6 +325,7 @@ function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.n
 			break;
 		}
 	}
+	value ??= cached?.value ?? null;
 	sweep(now);
 	setTimedCache(endpointCache, cacheKey, {
 		at: now,
@@ -360,7 +361,7 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 		return value ? { ...value } : null;
 	};
 	const database = findCodexLogDatabase(codexHome);
-	if (!database) return remember(null);
+	if (!database) return remember(cached?.value ?? null);
 	const lines = query(database, [
 		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
 		`  FROM logs`,
@@ -389,7 +390,7 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 			source: "log-init"
 		};
 	}
-	return remember(fallback);
+	return remember(fallback ?? cached?.value ?? null);
 }
 
 //#endregion
@@ -5984,4 +5985,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { isOfficialOpenAIEndpoint as A, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, findActiveSession as D, readConfiguredExternalUsage as E, getConfigPath as F, getHudStateDirectory as I, getLegacyStateDirectory as L, resolveProcessSession as M, resolveSessionEndpoint as N, RolloutParser as O, getCodexHome as P, DEFAULT_CONFIG as S, readCachedConfiguredExternalUsage as T, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveProcessEndpoint as j, findCodexLogDatabase as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, readLatestLoggedRateLimits as w, rawConfigVersion as x, reloadConfig as y };
-//# sourceMappingURL=session-binding-DKZrgQTi.mjs.map
+//# sourceMappingURL=session-binding-Cx2d2vFD.mjs.map

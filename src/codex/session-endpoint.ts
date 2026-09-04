@@ -248,6 +248,10 @@ export function resolveProcessEndpoint(
       break
     }
   }
+  // Codex tracing logs are bounded and may evict the process init row while
+  // the process is still alive. A missing refresh is not evidence that the
+  // already-confirmed endpoint changed.
+  value ??= cached?.value ?? null
   sweep(now)
   setTimedCache(endpointCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
   return value ? { ...value } : null
@@ -288,7 +292,7 @@ export function resolveSessionEndpoint(
   }
   const database = findCodexLogDatabase(codexHome)
   if (!database) {
-    return remember(null)
+    return remember(cached?.value ?? null)
   }
   const lines = query(database, [
     `SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
@@ -322,5 +326,8 @@ export function resolveSessionEndpoint(
       fallback = { url, source: 'log-init' }
     }
   }
-  return remember(fallback)
+  // The log database has bounded retention. Long-running sessions can outlive
+  // both their request and init rows, so keep the last confirmed endpoint when
+  // a refresh has no newer positive evidence.
+  return remember(fallback ?? cached?.value ?? null)
 }

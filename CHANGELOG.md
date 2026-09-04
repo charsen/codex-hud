@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved the last confirmed session endpoint when bounded Codex tracing logs evict its request and initialization rows, preventing valid quota windows from disappearing during long-running sessions.
+
+---
+
+### 修复
+
+- Codex tracing 日志因容量限制清理会话请求与初始化记录后，继续保留最近一次已确认的会话端点，避免长会话中的有效额度窗口突然消失。
+
 ## 0.8.0 - 2026-08-31
 
 ### Changed

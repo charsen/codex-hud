@@ -204,12 +204,23 @@ describe('session endpoint resolution', () => {
     expect(resolve(codexHome, 'thread-a\' OR \'1\'=\'1')).toBeNull()
   })
 
-  it('serves a repeated lookup from cache instead of querying again', () => {
+  it('keeps the last confirmed endpoint when source logs are pruned', () => {
     const codexHome = codexHomeWithLogs([request(10, 'thread-a', 'https://mine.example.com/v1/responses')])
     const first = resolve(codexHome, 'thread-a')
-    fs.rmSync(path.join(codexHome, 'logs_2.sqlite'))
     expect(resolveSessionEndpoint('thread-a', { CODEX_HOME: codexHome }, clock + 1_000)).toEqual(first)
-    expect(resolveSessionEndpoint('thread-a', { CODEX_HOME: codexHome }, clock + 60_000)).toBeNull()
+    execFileSync('sqlite3', [path.join(codexHome, 'logs_2.sqlite'), 'DELETE FROM logs;'])
+    expect(resolveSessionEndpoint('thread-a', { CODEX_HOME: codexHome }, clock + 60_000)).toEqual(first)
+  })
+
+  it('replaces a cached endpoint when newer positive evidence exists', () => {
+    const codexHome = codexHomeWithLogs([request(10, 'thread-a', 'https://first.example.com/v1/responses')])
+    expect(resolve(codexHome, 'thread-a')?.url).toBe('https://first.example.com/v1/responses')
+    execFileSync('sqlite3', [path.join(codexHome, 'logs_2.sqlite'), [
+      'INSERT INTO logs VALUES (2, 20, 0, \'pid:1:uuid\', \'thread-a\', \'codex_http_client::default_client\',',
+      '  \'Request completed method=POST url=https://second.example.com/v1/responses status=200 OK\');',
+    ].join('\n')])
+
+    expect(resolve(codexHome, 'thread-a')?.url).toBe('https://second.example.com/v1/responses')
   })
 
   it('prefers the newest log schema and skips non-files', () => {
@@ -226,6 +237,20 @@ describe('session endpoint resolution', () => {
       url: 'https://mine.example.com/v1',
       source: 'log-init',
     })
+  })
+
+  it('keeps a confirmed process endpoint when its init log is pruned', () => {
+    const codexHome = codexHomeWithLogs([init(2_000, `pid:${process.pid}:uuid`, 'https://mine.example.com/v1')])
+    clock += 60_000
+    const first = resolveProcessEndpoint(process.pid, new Date(1_000_000), { CODEX_HOME: codexHome }, clock)
+    execFileSync('sqlite3', [path.join(codexHome, 'logs_2.sqlite'), 'DELETE FROM logs;'])
+
+    expect(resolveProcessEndpoint(
+      process.pid,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock + 60_000,
+    )).toEqual(first)
   })
 
   it('resolves the root session owned by the Codex process', () => {
