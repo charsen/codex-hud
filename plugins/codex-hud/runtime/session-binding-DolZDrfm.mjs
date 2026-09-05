@@ -63,7 +63,7 @@ function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
 
 //#endregion
 //#region package.json
-var version = "0.9.1";
+var version = "0.9.2";
 
 //#endregion
 //#region src/version.ts
@@ -1101,12 +1101,15 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 	let previous = readStoredSnapshot(env, now, expectedOrigin);
 	if (cached?.value) {
 		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
-		if (fallback) previous = {
-			usage: fallback,
-			observedAt: cached.value.observedAt,
-			origin: cached.value.origin,
-			source: cached.value.source
-		};
+		if (fallback) {
+			const cachedSnapshot = {
+				usage: fallback,
+				observedAt: cached.value.observedAt,
+				origin: cached.value.origin,
+				source: cached.value.source
+			};
+			if (!previous || cachedSnapshot.observedAt > previous.observedAt) previous = cachedSnapshot;
+		}
 	}
 	const database = findCodexLogDatabase(codexHome);
 	if (!database) return remember(previous);
@@ -1123,7 +1126,7 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 			`   AND ts >= ${since}`,
 			`   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
 			`   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
-			" ORDER BY id DESC",
+			" ORDER BY ts DESC, id DESC",
 			` LIMIT ${MAX_EVENT_CANDIDATES};`
 		].join("\n")
 	], {
@@ -1150,6 +1153,7 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 		const origin = origins.has(processUuid) ? origins.get(processUuid) ?? null : eventOrigin(database, processUuid, timestamp);
 		origins.set(processUuid, origin);
 		if (!origin || expectedOrigin !== void 0 && origin !== expectedOrigin) continue;
+		if (previous && previous.observedAt >= observedAt) return remember(previous);
 		writeStoredSnapshot(env, body, observedAt, origin, "log");
 		return remember({
 			usage: fresh,
@@ -6286,4 +6290,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-PHnddL-j.mjs.map
+//# sourceMappingURL=session-binding-DolZDrfm.mjs.map

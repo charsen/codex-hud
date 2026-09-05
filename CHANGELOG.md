@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.9.2 - 2026-09-05
+
+### Fixed
+
+- Kept every live HUD session on the newest account-wide quota observation, so an expired in-memory cache or an older tracing-log event can no longer freeze usage or move it backward after another session publishes an update.
+
+---
+
+### 修复
+
+- 所有存活 HUD 会话现在都会采用最新的账户级额度观测；其他会话发布更新后，过期的进程内缓存或更旧的 tracing 日志事件不再导致用量停滞或倒退。
+
 ## 0.9.1 - 2026-09-05
 
 ### Fixed
