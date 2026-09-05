@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  clearEndpointCaches,
   findCodexLogDatabase,
+  inspectCodexLogSchema,
   isOfficialOpenAIEndpoint,
   resolveProcessEndpoint,
   resolveProcessSession,
@@ -15,6 +17,7 @@ const directories: string[] = []
 let clock = 1_000_000
 
 afterEach(() => {
+  clearEndpointCaches()
   directories.splice(0).forEach(directory => fs.rmSync(directory, { recursive: true, force: true }))
 })
 
@@ -184,6 +187,10 @@ describe('session endpoint resolution', () => {
       `INSERT INTO logs VALUES (1, 10, 'thread-a', 'codex_http_client::default_client', 'Request completed method=POST url=https://mine.example.com/v1/responses status=200 OK');`,
     ].join('\n')])
     expect(resolve(codexHome, 'thread-a')?.url).toBe('https://mine.example.com/v1/responses')
+    expect(inspectCodexLogSchema(codexHome)).toMatchObject({
+      endpointCompatible: false,
+      rateLimitCompatible: false,
+    })
   })
 
   it('ignores an init row belonging to a different Codex process', () => {
@@ -212,6 +219,22 @@ describe('session endpoint resolution', () => {
     expect(resolveSessionEndpoint('thread-a', { CODEX_HOME: codexHome }, clock + 60_000)).toEqual(first)
   })
 
+  it('restores the confirmed origin in a new HUD process after source logs are pruned', () => {
+    const codexHome = codexHomeWithLogs([request(10, 'thread-persisted', 'https://chatgpt.com/backend-api/codex/responses')])
+    expect(resolve(codexHome, 'thread-persisted')).toMatchObject({
+      url: 'https://chatgpt.com/backend-api/codex/responses',
+      source: 'log-request',
+    })
+    execFileSync('sqlite3', [path.join(codexHome, 'logs_2.sqlite'), 'DELETE FROM logs;'])
+    clearEndpointCaches()
+
+    expect(resolve(codexHome, 'thread-persisted')).toEqual({
+      url: 'https://chatgpt.com',
+      source: 'persisted',
+    })
+    expect(fs.statSync(path.join(codexHome, 'codex-hud', 'session-endpoints', 'thread-persisted.json')).mode & 0o777).toBe(0o600)
+  })
+
   it('replaces a cached endpoint when newer positive evidence exists', () => {
     const codexHome = codexHomeWithLogs([request(10, 'thread-a', 'https://first.example.com/v1/responses')])
     expect(resolve(codexHome, 'thread-a')?.url).toBe('https://first.example.com/v1/responses')
@@ -228,6 +251,11 @@ describe('session endpoint resolution', () => {
     fs.writeFileSync(path.join(codexHome, 'logs.sqlite'), '')
     fs.mkdirSync(path.join(codexHome, 'logs_10.sqlite'))
     expect(findCodexLogDatabase(codexHome)).toBe(path.join(codexHome, 'logs_9.sqlite'))
+    expect(inspectCodexLogSchema(codexHome)).toMatchObject({
+      database: path.join(codexHome, 'logs_9.sqlite'),
+      endpointCompatible: true,
+      rateLimitCompatible: true,
+    })
   })
 
   it('resolves a Codex process that has not created a session yet', () => {
