@@ -63,7 +63,7 @@ function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
 
 //#endregion
 //#region package.json
-var version = "0.9.4";
+var version = "0.10.0";
 
 //#endregion
 //#region src/version.ts
@@ -1322,6 +1322,9 @@ function policyLabel(value) {
 		if ("granular" in value) return "granular";
 	}
 }
+function lifecycleDate(value, fallback) {
+	return safeDate$1(typeof value === "number" && Math.abs(value) < 1e11 ? value * 1e3 : value, fallback);
+}
 function parseArguments(value) {
 	if (!value) return null;
 	try {
@@ -1645,7 +1648,7 @@ var RolloutParser = class {
 		}
 		if (!this.state.session) return;
 		if (payload.type === "task_started") {
-			this.state.session.lastTurnStartedAt = safeDate$1(payload.started_at, timestamp);
+			this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp);
 			if (typeof payload.model_context_window === "number") this.latestTokenUsage = {
 				total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
 				last_token_usage: this.latestTokenUsage?.last_token_usage ?? {},
@@ -1654,7 +1657,8 @@ var RolloutParser = class {
 			return;
 		}
 		if (payload.type === "task_complete" || payload.type === "turn_aborted") {
-			this.state.session.lastTurnCompletedAt = safeDate$1(payload.completed_at, timestamp);
+			this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp);
+			if (payload.type === "task_complete") this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt;
 			this.state.session.lastTurnDurationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : void 0;
 			this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === "number" ? payload.time_to_first_token_ms : void 0;
 			const outputTokens = this.latestTokenUsage?.last_token_usage?.output_tokens;
@@ -2858,6 +2862,7 @@ const DEFAULT_CONFIG = {
 		showSessionTokens: false,
 		showSessionStartDate: false,
 		showLastResponseAt: false,
+		showLastCompletedAt: true,
 		showCompactions: false,
 		showSessionId: false,
 		mergeGroups: DEFAULT_MERGE_GROUPS.map((group) => [...group]),
@@ -3098,6 +3103,7 @@ function validateConfig(value) {
 			showSessionTokens: booleanValue(rawDisplay.showSessionTokens, fallback.display.showSessionTokens),
 			showSessionStartDate: booleanValue(rawDisplay.showSessionStartDate, fallback.display.showSessionStartDate),
 			showLastResponseAt: booleanValue(rawDisplay.showLastResponseAt, fallback.display.showLastResponseAt),
+			showLastCompletedAt: booleanValue(rawDisplay.showLastCompletedAt, fallback.display.showLastCompletedAt),
 			showCompactions: booleanValue(rawDisplay.showCompactions, fallback.display.showCompactions),
 			showSessionId: booleanValue(rawDisplay.showSessionId, fallback.display.showSessionId),
 			mergeGroups: mergeGroups(rawDisplay.mergeGroups),
@@ -5036,6 +5042,7 @@ const MESSAGES = {
 		mode: "Mode",
 		started: "Started",
 		lastResponse: "Last response",
+		lastCompleted: "Last completed",
 		input: "in",
 		cache: "cache",
 		output: "out",
@@ -5074,6 +5081,7 @@ const MESSAGES = {
 		mode: "模式",
 		started: "开始",
 		lastResponse: "最近响应",
+		lastCompleted: "最后完成",
 		input: "输入",
 		cache: "缓存",
 		output: "输出",
@@ -5382,6 +5390,12 @@ function renderSessionLine(ctx) {
 	const session = ctx.state.session;
 	const parts = [];
 	if (ctx.config.display.showDuration) parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
+	if (ctx.config.display.showLastCompletedAt && session?.lastCompletedAt) {
+		const date = session.lastCompletedAt;
+		const pad = (value) => String(value).padStart(2, "0");
+		const completed = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+		parts.push(color(`${message(ctx.config.language, "lastCompleted")}: ${completed}`, "cyan", ctx.options.color));
+	}
 	if (ctx.config.display.showSessionStartDate && session?.startTime) {
 		const locale = ctx.config.language === "en" ? "en" : "zh-CN";
 		parts.push(`${message(ctx.config.language, "started")} ${session.startTime.toLocaleString(locale)}`);
@@ -6353,4 +6367,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-BASye-Wh.mjs.map
+//# sourceMappingURL=session-binding-CxDseTPB.mjs.map

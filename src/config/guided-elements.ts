@@ -13,6 +13,7 @@ export type GuidedElement
     | 'images'
     | 'configCounts'
     | 'duration'
+    | 'lastCompleted'
     | 'speed'
     | 'promptCache'
     | 'sessionName'
@@ -45,6 +46,7 @@ export const GUIDED_ELEMENTS: readonly GuidedElementDefinition[] = [
   { name: 'auth', category: 'Environment', label: 'Authentication method', get: config => config.display.showAuth, set: (config, value) => config.display.showAuth = value },
   { name: 'memory', category: 'Environment', label: 'Approximate system memory', get: config => config.display.showMemoryUsage, set: (config, value) => config.display.showMemoryUsage = value },
   { name: 'duration', category: 'Session', label: 'Session duration', get: config => config.display.showDuration, set: (config, value) => config.display.showDuration = value },
+  { name: 'lastCompleted', category: 'Session', label: 'Last completion time', get: config => config.display.showLastCompletedAt, set: (config, value) => config.display.showLastCompletedAt = value },
   { name: 'speed', category: 'Session', label: 'Output speed', get: config => config.display.showSpeed, set: (config, value) => config.display.showSpeed = value },
   { name: 'sessionName', category: 'Session', label: 'Session title', get: config => config.display.showSessionName, set: (config, value) => config.display.showSessionName = value },
   { name: 'sessionTokens', category: 'Session', label: 'Session token totals', get: config => config.display.showSessionTokens, set: (config, value) => config.display.showSessionTokens = value },

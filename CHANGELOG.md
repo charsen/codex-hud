@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.0 - 2026-09-05
+
+### Added
+
+- Added a configurable, cyan-highlighted last-completion timestamp beside session duration, with English/Chinese labels and local `MM-DD HH:mm` time. It records normal turn completion, survives HUD restarts, and is not overwritten by intermediate replies or aborted turns. Enable or hide it with `lastCompleted` in the display configuration.
+
+---
+
+### 新增
+
+- 在会话时长旁新增可开关、青色高亮的“最后完成”时间，适配中英文标签，使用本机时区的 `MM-DD HH:mm` 格式，不显示年份。仅记录正常轮次结束，重启 HUD 后仍可恢复，中途回复与中断不会覆盖；可通过显示配置中的 `lastCompleted` 开关控制。
+
 ## 0.9.4 - 2026-09-05
 
 ### Fixed

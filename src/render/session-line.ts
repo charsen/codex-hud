@@ -1,4 +1,5 @@
 import type { RenderContext } from '../types/render.js'
+import { color } from './colors.js'
 import { formatDuration, formatTokens } from './format.js'
 import { message } from './i18n.js'
 
@@ -14,6 +15,12 @@ export function renderSessionLine(ctx: RenderContext): string | null {
   const parts: string[] = []
   if (ctx.config.display.showDuration) {
     parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`)
+  }
+  if (ctx.config.display.showLastCompletedAt && session?.lastCompletedAt) {
+    const date = session.lastCompletedAt
+    const pad = (value: number): string => String(value).padStart(2, '0')
+    const completed = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    parts.push(color(`${message(ctx.config.language, 'lastCompleted')}: ${completed}`, 'cyan', ctx.options.color))
   }
   if (ctx.config.display.showSessionStartDate && session?.startTime) {
     const locale = ctx.config.language === 'en' ? 'en' : 'zh-CN'

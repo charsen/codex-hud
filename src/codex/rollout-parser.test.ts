@@ -58,6 +58,49 @@ describe('jSONL tailing', () => {
 })
 
 describe('rollout parser', () => {
+  it.each([1788647387, 1788647387000, '2026-09-05T22:29:47Z'])('accepts lifecycle timestamps in seconds, milliseconds or ISO format: %s', (value) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hud-lifecycle-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    const entries = [
+      { type: 'session_meta', payload: { id: 'lifecycle-test' } },
+      { type: 'event_msg', payload: { type: 'task_started', started_at: value } },
+      { type: 'event_msg', payload: { type: 'task_complete', completed_at: value } },
+    ]
+    fs.writeFileSync(filePath, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`)
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const date = new Date('2026-09-05T22:29:47Z')
+    expect(parser.parse().session).toMatchObject({ lastTurnStartedAt: date, lastTurnCompletedAt: date, lastCompletedAt: date })
+  })
+
+  it('retains the last normal completion across new turns, replies, aborts and parser restarts', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hud-completion-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    const append = (type: string, payload: object, timestamp = '2026-09-05T18:35:00Z') => {
+      fs.appendFileSync(filePath, `${JSON.stringify({ type, payload, timestamp })}\n`)
+    }
+    append('session_meta', { id: 'completion-test', cwd: directory })
+    append('event_msg', { type: 'task_started' })
+    append('response_item', { type: 'message', role: 'assistant', content: [] })
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().session?.lastCompletedAt).toBeUndefined()
+    append('event_msg', { type: 'task_complete', completed_at: '2026-09-05T18:34:00Z' })
+    const completed = new Date('2026-09-05T18:34:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(completed)
+    append('event_msg', { type: 'task_started' }, '2026-09-06T00:00:00Z')
+    append('response_item', { type: 'message', role: 'assistant', content: [] }, '2026-09-06T00:01:00Z')
+    append('event_msg', { type: 'turn_aborted' }, '2026-09-06T00:02:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(completed)
+    const restarted = new RolloutParser()
+    restarted.setFile(filePath)
+    expect(restarted.parse().session?.lastCompletedAt).toEqual(completed)
+    append('event_msg', { type: 'task_complete' }, '2026-09-06T00:03:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(new Date('2026-09-06T00:03:00Z'))
+  })
+
   it('parses representative legacy and current Codex rollout contracts', () => {
     const legacy = new RolloutParser()
     legacy.setFile(fixturePath)

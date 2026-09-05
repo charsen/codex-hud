@@ -90,6 +90,11 @@ function policyLabel(value: unknown): string | undefined {
   return undefined
 }
 
+function lifecycleDate(value: unknown, fallback: Date): Date {
+  // Current Codex uses Unix seconds; older records can carry ISO strings or milliseconds.
+  return safeDate(typeof value === 'number' && Math.abs(value) < 100_000_000_000 ? value * 1000 : value, fallback)
+}
+
 function parseArguments(value: string | undefined): Record<string, unknown> | null {
   if (!value) {
     return null
@@ -575,7 +580,7 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'task_started') {
-      this.state.session.lastTurnStartedAt = safeDate(payload.started_at, timestamp)
+      this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp)
       if (typeof payload.model_context_window === 'number') {
         this.latestTokenUsage = {
           total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
@@ -586,7 +591,10 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'task_complete' || payload.type === 'turn_aborted') {
-      this.state.session.lastTurnCompletedAt = safeDate(payload.completed_at, timestamp)
+      this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp)
+      if (payload.type === 'task_complete') {
+        this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt
+      }
       this.state.session.lastTurnDurationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined
       this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === 'number'
         ? payload.time_to_first_token_ms

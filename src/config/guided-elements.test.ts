@@ -8,6 +8,17 @@ import {
 import { createPreset } from './presets.js'
 
 describe('guided HUD elements', () => {
+  it('can toggle completion time without changing the response-time preference', () => {
+    const config = createPreset('full')
+    expect(config.display.showLastCompletedAt).toBe(true)
+    const lastResponse = config.display.showLastResponseAt
+    applyGuidedElementChanges(config, { disable: ['lastCompleted'] })
+    expect(config.display.showLastCompletedAt).toBe(false)
+    applyGuidedElementChanges(config, { enable: ['lastCompleted'] })
+    expect(config.display.showLastCompletedAt).toBe(true)
+    expect(config.display.showLastResponseAt).toBe(lastResponse)
+  })
+
   it('exposes stable names and reports the current enabled state', () => {
     expect(GUIDED_ELEMENTS.map(element => element.name)).toEqual([
       'git',
@@ -25,6 +36,7 @@ describe('guided HUD elements', () => {
       'auth',
       'memory',
       'duration',
+      'lastCompleted',
       'speed',
       'sessionName',
       'sessionTokens',

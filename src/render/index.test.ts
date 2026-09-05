@@ -5,8 +5,29 @@ import { HUD_VERSION } from '../version.js'
 import { visibleWidth } from './format.js'
 import { renderHud } from './index.js'
 import { renderProjectLine } from './project-line.js'
+import { renderSessionLine } from './session-line.js'
 
 const now = new Date('2026-07-16T09:00:00Z')
+
+describe('last completion time', () => {
+  it('shows a persistent local calendar time and supports hiding the metric', () => {
+    const value = state()
+    value.session!.lastCompletedAt = new Date(2026, 8, 6, 2, 35)
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderSessionLine(ctx)).toContain('Last completed: 09-06 02:35')
+    expect(renderSessionLine(ctx)).not.toContain('2026-')
+    ctx.now = new Date(2026, 8, 7, 10, 0)
+    ctx.config.language = 'zh-Hans'
+    expect(renderSessionLine(ctx)).toContain('最后完成: 09-06 02:35')
+    ctx.options.color = true
+    expect(renderSessionLine(ctx)).toContain('\u001B[36m最后完成: 09-06 02:35\u001B[0m')
+    ctx.config.display.showLastCompletedAt = false
+    expect(renderSessionLine(ctx)).not.toContain('最后完成')
+    ctx.config.display.showLastCompletedAt = true
+    value.session!.lastCompletedAt = undefined
+    expect(renderSessionLine(ctx)).not.toContain('最后完成')
+  })
+})
 
 describe('model selection during a turn', () => {
   it('shows selected settings and the still-running model, then clears the distinction on the next turn', () => {

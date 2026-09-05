@@ -93,8 +93,8 @@ export interface EventMessagePayload {
   turn_id?: string
   message?: string
   phase?: string
-  started_at?: string
-  completed_at?: string
+  started_at?: string | number
+  completed_at?: string | number
   duration_ms?: number
   time_to_first_token_ms?: number
   model_context_window?: number
