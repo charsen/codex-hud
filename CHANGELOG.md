@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept account-wide ChatGPT quota windows separate from named model-specific limits, and shared fresh rollout observations across official-endpoint HUD sessions when Codex writes no account limit event to its tracing log.
+
+---
+
+### 修复
+
+- 将 ChatGPT 账户级额度窗口与具名模型专属额度分开处理；当 Codex 未把账户额度事件写入 tracing 日志时，在同一官方端点的 HUD 会话之间共享 rollout 中的新鲜账户额度。
+
 ## 0.9.0 - 2026-09-05
 
 ### Added
