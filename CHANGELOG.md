@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.1 - 2026-09-05
+
 ### Fixed
 
 - Kept account-wide ChatGPT quota windows separate from named model-specific limits, and shared fresh rollout observations across official-endpoint HUD sessions when Codex writes no account limit event to its tracing log.
