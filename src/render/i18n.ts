@@ -2,6 +2,7 @@ import type { Language } from '../types/config.js'
 
 const MESSAGES = {
   'en': {
+    runningModel: 'running',
     context: 'Context',
     usage: 'Usage',
     resetsIn: 'resets in',
@@ -39,6 +40,7 @@ const MESSAGES = {
     navigate: 'click HUD or press F12, then n',
   },
   'zh-Hans': {
+    runningModel: '本轮执行',
     context: '上下文',
     usage: '额度',
     resetsIn: '重置于',

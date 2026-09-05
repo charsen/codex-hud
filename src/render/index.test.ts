@@ -4,8 +4,46 @@ import { createPreset } from '../config/presets.js'
 import { HUD_VERSION } from '../version.js'
 import { visibleWidth } from './format.js'
 import { renderHud } from './index.js'
+import { renderProjectLine } from './project-line.js'
 
 const now = new Date('2026-07-16T09:00:00Z')
+
+describe('model selection during a turn', () => {
+  it('shows selected settings and the still-running model, then clears the distinction on the next turn', () => {
+    const value = state()
+    const session = value.session!
+    session.model = 'gpt-5.6-sol'
+    session.reasoningEffort = 'xhigh'
+    session.selectedModel = { model: 'gpt-6-astra', reasoningEffort: 'high' }
+    session.lastTurnStartedAt = now
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderProjectLine(ctx)).toContain('[gpt-6-astra high; running: gpt-5.6-sol xhigh]')
+    ctx.config.language = 'zh-Hans'
+    expect(renderProjectLine(ctx)).toContain('本轮执行: gpt-5.6-sol xhigh')
+    session.model = 'gpt-6-astra'
+    session.reasoningEffort = 'high'
+    expect(renderProjectLine(ctx)).toContain('[gpt-6-astra high]')
+    expect(renderProjectLine(ctx)).not.toContain('本轮执行')
+  })
+
+  it('respects overrides, hidden effort and completion', () => {
+    const value = state()
+    const session = value.session!
+    session.selectedModel = { model: session.model!, reasoningEffort: 'low' }
+    session.lastTurnStartedAt = now
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderProjectLine(ctx)).toContain('running: gpt-5.5 high')
+    ctx.config.display.showEffortLevel = false
+    expect(renderProjectLine(ctx)).not.toContain('running:')
+    ctx.config.display.modelOverride = 'custom label'
+    expect(renderProjectLine(ctx)).toContain('[custom label]')
+    ctx.config.display.modelOverride = ''
+    ctx.config.display.showEffortLevel = true
+    session.lastTurnCompletedAt = now
+    expect(renderProjectLine(ctx)).toContain('[gpt-5.5 low]')
+    expect(renderProjectLine(ctx)).not.toContain('running:')
+  })
+})
 const resetDateTimeOptions: Intl.DateTimeFormatOptions = {
   month: 'short',
   day: 'numeric',
