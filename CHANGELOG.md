@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Right-aligned the current HUD version on the last visible line when the terminal has spare width, while keeping a one-column terminal safety margin and prioritizing telemetry on narrow layouts.
+
+---
+
+### 新增
+
+- 终端宽度充足时，在最后一条可见行的右侧显示当前 HUD 版本，并保留一列终端安全边距；窄布局仍优先保留既有遥测内容。
+
 ## 0.9.2 - 2026-09-05
 
 ### Fixed
