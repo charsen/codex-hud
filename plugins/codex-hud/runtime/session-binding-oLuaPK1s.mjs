@@ -895,7 +895,7 @@ const SNAPSHOT_FILE_NAME = "account-usage.json";
 const MAX_STORED_BODY_LENGTH = 16384;
 const CACHE_MAX_AGE_MS$1 = 30 * 6e4;
 const CACHE_MAX_ENTRIES$1 = 64;
-const cache$2 = /* @__PURE__ */ new Map();
+const cache$3 = /* @__PURE__ */ new Map();
 function record$1(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -1089,10 +1089,10 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 	if (expectedOrigin === null) return null;
 	const codexHome = getCodexHome(env);
 	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
-	const cached = cache$2.get(cacheKey);
+	const cached = cache$3.get(cacheKey);
 	if (cached && now - cached.at < CACHE_MS$1) return cloneSnapshot(cached.value);
 	const remember = (value) => {
-		setTimedCache(cache$2, cacheKey, {
+		setTimedCache(cache$3, cacheKey, {
 			at: now,
 			value: cloneSnapshot(value)
 		}, CACHE_MAX_AGE_MS$1, CACHE_MAX_ENTRIES$1);
@@ -1515,7 +1515,7 @@ var RolloutParser = class {
 			return;
 		}
 		if (entry.type === "turn_context") {
-			this.onTurnContext(entry.payload);
+			this.onTurnContext(entry.payload, timestamp);
 			return;
 		}
 		if (entry.type === "response_item") {
@@ -1538,9 +1538,10 @@ var RolloutParser = class {
 			source: payload.thread_source ?? payload.source
 		};
 	}
-	onTurnContext(payload) {
+	onTurnContext(payload, timestamp) {
 		if (!this.state.session) return;
 		this.state.session.turnId = payload.turn_id;
+		this.state.session.modelObservedAt = timestamp;
 		this.state.session.cwd = payload.cwd ?? this.state.session.cwd;
 		this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots;
 		this.state.session.model = payload.model ?? payload.collaboration_mode?.settings?.model ?? this.state.session.model;
@@ -5004,6 +5005,7 @@ function projectPath(value, levels) {
 //#region src/render/i18n.ts
 const MESSAGES = {
 	"en": {
+		runningModel: "running",
 		context: "Context",
 		usage: "Usage",
 		resetsIn: "resets in",
@@ -5041,6 +5043,7 @@ const MESSAGES = {
 		navigate: "click HUD or press F12, then n"
 	},
 	"zh-Hans": {
+		runningModel: "本轮执行",
 		context: "上下文",
 		usage: "额度",
 		resetsIn: "重置于",
@@ -5235,12 +5238,19 @@ function addedDirectories(ctx, prefix) {
 	return roots;
 }
 function modelName(ctx) {
-	const model = ctx.config.display.modelOverride.trim() || ctx.state.session?.model;
+	const override = ctx.config.display.modelOverride.trim();
+	const session = ctx.state.session;
+	const selected = session?.selectedModel;
+	const model = override || selected?.model || session?.model;
 	if (!model || !ctx.config.display.showModel) return null;
 	const compact = ctx.config.display.modelFormat === "full" ? model : model.replace(/^openai\//, "").replace(/-\d+k(?:-context)?$/i, "");
-	const effort = ctx.config.display.showEffortLevel && ctx.state.session?.reasoningEffort ? ` ${ctx.state.session.reasoningEffort}` : "";
+	const reasoningEffort = selected ? selected.reasoningEffort : session?.reasoningEffort;
+	const effort = ctx.config.display.showEffortLevel && reasoningEffort ? ` ${reasoningEffort}` : "";
 	const provider = ctx.config.display.showProvider ? ctx.config.display.providerName || ctx.state.session?.modelProvider : null;
-	return color(`[${safeText(provider ? `${provider} | ${compact}${effort}` : `${compact}${effort}`)}]`, ctx.config.colors.model, ctx.options.color);
+	const running = session?.lastTurnStartedAt && session.lastTurnStartedAt.getTime() > (session.lastTurnCompletedAt?.getTime() ?? 0);
+	const differs = selected && session?.model && (selected.model !== session.model || ctx.config.display.showEffortLevel && selected.reasoningEffort !== session.reasoningEffort);
+	const active = !override && running && differs ? `; ${message(ctx.config.language, "runningModel")}: ${session.model}${ctx.config.display.showEffortLevel && session.reasoningEffort ? ` ${session.reasoningEffort}` : ""}` : "";
+	return color(`[${safeText(provider ? `${provider} | ${compact}${effort}${active}` : `${compact}${effort}${active}`)}]`, ctx.config.colors.model, ctx.options.color);
 }
 function gitSegment(ctx) {
 	if (!ctx.config.gitStatus.enabled || !ctx.state.git?.isGitRepo || !ctx.state.git.branch) return null;
@@ -5677,6 +5687,48 @@ function settleCmuxPaneHeight(currentRows, managedHeight, selfFraction, geometry
 		height: managedHeight,
 		manual: false
 	};
+}
+
+//#endregion
+//#region src/codex/session-model.ts
+const cache$2 = /* @__PURE__ */ new Map();
+/** Read the selected settings for this exact thread, independently of its running turn. */
+function readSelectedModel(session, env = process.env, now = Date.now()) {
+	const database = path.join(getCodexHome(env), "state_5.sqlite");
+	if (!/^[\w-]{1,128}$/.test(session.id) || !fs.existsSync(database)) return null;
+	const key = `${database}:${session.id}`;
+	const cached = cache$2.get(key);
+	let value = cached?.value ?? null;
+	if (!cached || now - cached.at >= 1e3) {
+		value = null;
+		try {
+			const result = spawnSync("sqlite3", [
+				"-readonly",
+				"-json",
+				database,
+				`SELECT model, reasoning_effort, updated_at_ms FROM threads WHERE id = '${session.id}' LIMIT 1;`
+			], {
+				encoding: "utf8",
+				timeout: 750,
+				maxBuffer: 64 * 1024,
+				windowsHide: true
+			});
+			if (result.status === 0) {
+				const row = JSON.parse(result.stdout || "[]")[0];
+				if (typeof row?.model === "string" && row.model.trim() && Number.isFinite(row.updated_at_ms)) value = {
+					model: row.model,
+					reasoningEffort: typeof row.reasoning_effort === "string" ? row.reasoning_effort : void 0,
+					updatedAt: row.updated_at_ms
+				};
+			}
+		} catch {}
+		setTimedCache(cache$2, key, {
+			at: now,
+			value
+		}, 6e4, 256);
+	}
+	if (value && value.updatedAt >= (session.modelObservedAt?.getTime() ?? session.startTime.getTime())) return { ...value };
+	return null;
 }
 
 //#endregion
@@ -6154,6 +6206,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		...rollout.session,
 		sessionName: title ?? rollout.session.sessionName
 	} : null;
+	if (session && config.display.showModel) session.selectedModel = readSelectedModel(session, process.env, now.getTime()) ?? void 0;
 	const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null;
 	return {
 		session,
@@ -6300,4 +6353,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-C46L2ABs.mjs.map
+//# sourceMappingURL=session-binding-oLuaPK1s.mjs.map

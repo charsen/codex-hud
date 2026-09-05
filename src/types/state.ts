@@ -139,6 +139,8 @@ export interface SessionInfo {
   cliVersion?: string
   model?: string
   reasoningEffort?: string
+  modelObservedAt?: Date
+  selectedModel?: { model: string, reasoningEffort?: string }
   modelProvider?: string
   source?: SessionSource
   turnId?: string

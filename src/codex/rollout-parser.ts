@@ -377,7 +377,7 @@ export class RolloutParser {
       return
     }
     if (entry.type === 'turn_context') {
-      this.onTurnContext(entry.payload as TurnContextPayload)
+      this.onTurnContext(entry.payload as TurnContextPayload, timestamp)
       return
     }
     if (entry.type === 'response_item') {
@@ -406,11 +406,12 @@ export class RolloutParser {
     }
   }
 
-  private onTurnContext(payload: TurnContextPayload): void {
+  private onTurnContext(payload: TurnContextPayload, timestamp: Date): void {
     if (!this.state.session) {
       return
     }
     this.state.session.turnId = payload.turn_id
+    this.state.session.modelObservedAt = timestamp
     this.state.session.cwd = payload.cwd ?? this.state.session.cwd
     this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots
     this.state.session.model = payload.model

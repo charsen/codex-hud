@@ -6,6 +6,7 @@ import type { HudState, UsageData } from '../types/state.js'
 import process from 'node:process'
 import { resolveUsageData } from '../codex/external-usage.js'
 import { evaluateUsageTrust, trustedUsageData } from '../codex/rate-limits.js'
+import { readSelectedModel } from '../codex/session-model.js'
 import {
   collectAgentEntries,
   collectAuthInfo,
@@ -41,6 +42,9 @@ export function buildHudState(
   const session = rollout.session
     ? { ...rollout.session, sessionName: title ?? rollout.session.sessionName }
     : null
+  if (session && config.display.showModel) {
+    session.selectedModel = readSelectedModel(session, process.env, now.getTime()) ?? undefined
+  }
   const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null
   return {
     session,

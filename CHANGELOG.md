@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh the selected model and reasoning effort from the current thread's settings when switching models mid-session. If an active turn still uses the previous model, show it separately as `running` until the turn ends or the models agree. Older or unavailable state databases retain rollout-based display.
+
+---
+
+### 修复
+
+- 会话中途切换模型时，从当前会话设置刷新已选择的模型与推理强度；若正在执行的轮次仍使用旧模型，则单独标注“本轮执行”，直到该轮结束或模型一致。状态数据库版本较旧或不可用时，保持基于轮次记录的显示。
+
 ## 0.9.1 - 2026-09-05
 
 ### Added
