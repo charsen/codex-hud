@@ -63,7 +63,7 @@ function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
 
 //#endregion
 //#region package.json
-var version = "0.9.2";
+var version = "0.9.3";
 
 //#endregion
 //#region src/version.ts
@@ -5432,6 +5432,9 @@ function renderUsageLine(ctx) {
 
 //#endregion
 //#region src/render/index.ts
+const HUD_VERSION_LABEL = `HUD v${HUD_VERSION}`;
+const HUD_VERSION_MIN_GAP = 2;
+const HUD_VERSION_RIGHT_MARGIN = 1;
 function renderElement(ctx, element) {
 	switch (element) {
 		case "project": return renderProjectLine(ctx);
@@ -5529,7 +5532,14 @@ function renderHud(ctx) {
 	if (ctx.config.display.customLine) lines = ctx.config.display.customLinePosition === "first" ? [ctx.config.display.customLine, ...lines] : [...lines, ctx.config.display.customLine];
 	if (ctx.config.showSeparators && lines.length > 2) lines.splice(2, 0, "─".repeat(Math.min(ctx.options.width, Math.max(20, visibleWidth(lines[0] ?? "")))));
 	const height = Math.max(1, ctx.options.height);
-	return lines.slice(0, height).map((line) => truncateAnsi(line, ctx.options.width));
+	const visible = lines.slice(0, height).map((line) => truncateAnsi(line, ctx.options.width));
+	const lastIndex = visible.length - 1;
+	const lastLine = visible[lastIndex];
+	if (lastLine !== void 0) {
+		const padding = ctx.options.width - HUD_VERSION_RIGHT_MARGIN - visibleWidth(lastLine) - visibleWidth(HUD_VERSION_LABEL);
+		if (padding >= HUD_VERSION_MIN_GAP) visible[lastIndex] = `${lastLine}${" ".repeat(padding)}${color(HUD_VERSION_LABEL, "dim", ctx.options.color)}`;
+	}
+	return visible;
 }
 
 //#endregion
@@ -6290,4 +6300,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-DolZDrfm.mjs.map
+//# sourceMappingURL=session-binding-BkkYeC7U.mjs.map

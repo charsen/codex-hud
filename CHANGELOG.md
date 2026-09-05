@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.3 - 2026-09-05
+
 ### Added
 
 - Right-aligned the current HUD version on the last visible line when the terminal has spare width, while keeping a one-column terminal safety margin and prioritizing telemetry on narrow layouts.
