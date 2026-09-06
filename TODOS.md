@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Refresh ChatGPT account quota independently of rollout activity; verify shared polling, failure freshness, account isolation, and monotonic observations.
+
 - [x] Make quota windows stable and persist trusted per-session endpoint evidence across HUD processes.
 - [x] Add usage provenance, trust, freshness, and hidden-reason diagnostics to `doctor`.
 - [x] Align Full/Essential presets, setup prompts, and English/Chinese documentation with actual defaults.
