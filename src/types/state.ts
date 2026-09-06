@@ -153,6 +153,9 @@ export interface SessionInfo {
   lastTurnStartedAt?: Date
   lastTurnCompletedAt?: Date
   lastCompletedAt?: Date
+  lastActivityAt?: Date
+  active?: boolean
+  activity?: { active: boolean, lastActivityAt?: Date }
   lastTurnDurationMs?: number
   timeToFirstTokenMs?: number
   outputTokensPerSecond?: number

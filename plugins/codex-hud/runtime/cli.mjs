@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as evaluateUsageTrust, B as resolveSessionEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as findCodexLogDatabase, G as getLegacyStateDirectory, H as getCodexHome, I as inspectCodexLogSchema, L as isOfficialOpenAIEndpoint, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, P as resolveUsageData, S as DEFAULT_CONFIG, T as findActiveSession, U as getConfigPath, V as HUD_VERSION, W as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as trustedUsageData, k as readLatestLoggedRateLimits, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion } from "./session-binding-CxDseTPB.mjs";
+import { A as evaluateUsageTrust, B as resolveSessionEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as findCodexLogDatabase, G as getLegacyStateDirectory, H as getCodexHome, I as inspectCodexLogSchema, L as isOfficialOpenAIEndpoint, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, P as resolveUsageData, S as DEFAULT_CONFIG, T as findActiveSession, U as getConfigPath, V as HUD_VERSION, W as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as trustedUsageData, k as readLatestLoggedRateLimits, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion } from "./session-binding-BYjWKJrJ.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1159,7 +1159,7 @@ const GUIDED_ELEMENTS = [
 	{
 		name: "lastCompleted",
 		category: "Session",
-		label: "Last completion time",
+		label: "Task activity / completion time",
 		get: (config) => config.display.showLastCompletedAt,
 		set: (config, value) => config.display.showLastCompletedAt = value
 	},
@@ -1410,7 +1410,7 @@ const CONFIGURE_MESSAGES = {
 			auth: "Authentication method",
 			memory: "Approximate system memory",
 			duration: "Session duration",
-			lastCompleted: "Last completion time",
+			lastCompleted: "Task activity / completion time",
 			speed: "Output speed",
 			sessionName: "Session title",
 			sessionTokens: "Session token totals",
@@ -1473,7 +1473,7 @@ const CONFIGURE_MESSAGES = {
 			auth: "认证方式",
 			memory: "系统内存估计",
 			duration: "会话时长",
-			lastCompleted: "最后完成时间",
+			lastCompleted: "任务活动 / 完成时间",
 			speed: "输出速度",
 			sessionName: "会话标题",
 			sessionTokens: "会话 Token 汇总",

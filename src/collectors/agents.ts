@@ -18,10 +18,18 @@ interface AgentRuntime {
   entry: AgentEntry
   parentThreadId: string
   active: boolean
+  visible: boolean
+  lastActivityAt: Date
+}
+
+export interface AgentSnapshot {
+  agents: AgentEntry[]
+  activity: { active: boolean, lastActivityAt?: Date }
 }
 
 interface ParsedAgentRollout {
   active: boolean
+  hasStarted: boolean
   model?: string
   startedAt: Date
   lastTimestamp: Date
@@ -33,12 +41,13 @@ interface AgentRolloutCache {
   size: number
   tail: JsonlTail
   activeTurns: Set<string>
+  hasStarted: boolean
   model?: string
   startedAt: Date
   lastTimestamp: Date
 }
 
-let cache: { key: string, at: number, agents: AgentEntry[] } | null = null
+let cache: { key: string, at: number, snapshot: AgentSnapshot } | null = null
 const rolloutCache = new Map<string, AgentRolloutCache>()
 
 function safeDate(value: unknown, fallback: Date): Date {
@@ -79,6 +88,7 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
     cached.at = Date.now()
     return {
       active: cached.activeTurns.size > 0,
+      hasStarted: cached.hasStarted,
       model: cached.model,
       startedAt: new Date(cached.startedAt),
       lastTimestamp: new Date(cached.lastTimestamp),
@@ -91,6 +101,7 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
       size: 0,
       tail: new JsonlTail(),
       activeTurns: new Set<string>(),
+      hasStarted: false,
       startedAt: candidate.startTime,
       lastTimestamp: candidate.startTime,
     }
@@ -99,6 +110,7 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
     const { lines, reset } = cached.tail.read(candidate.path)
     if (reset) {
       cached.activeTurns.clear()
+      cached.hasStarted = false
       cached.model = undefined
       cached.startedAt = candidate.startTime
       cached.lastTimestamp = candidate.startTime
@@ -131,13 +143,16 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
         continue
       }
       if (payload.type === 'task_started' && typeof payload.turn_id === 'string') {
+        cached.hasStarted = true
         cached.activeTurns.add(payload.turn_id)
         cached.startedAt = safeDate(payload.started_at, cached.lastTimestamp)
       }
       else if (payload.type === 'task_complete' && typeof payload.turn_id === 'string') {
+        cached.hasStarted = true
         cached.activeTurns.delete(payload.turn_id)
       }
       else if (payload.type === 'turn_aborted') {
+        cached.hasStarted = true
         if (typeof payload.turn_id === 'string') {
           cached.activeTurns.delete(payload.turn_id)
         }
@@ -157,6 +172,7 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
   setTimedCache(rolloutCache, candidate.path, cached, ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES)
   const value: ParsedAgentRollout = {
     active: cached.activeTurns.size > 0,
+    hasStarted: cached.hasStarted,
     model: cached.model,
     startedAt: cached.startedAt,
     lastTimestamp: cached.lastTimestamp,
@@ -171,13 +187,12 @@ function parseAgent(candidate: SessionCandidate, now: Date): AgentRuntime | null
   }
   const active = parsed.active
   const ageMs = now.getTime() - candidate.mtimeMs
-  const starting = !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime()
-  if (!active && !starting && ageMs > COMPLETED_VISIBLE_MS) {
-    return null
-  }
+  const starting = !parsed.hasStarted && !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime()
   return {
     parentThreadId: candidate.parentThreadId ?? '',
-    active,
+    active: active || starting,
+    visible: active || starting || ageMs <= COMPLETED_VISIBLE_MS,
+    lastActivityAt: parsed.lastTimestamp,
     entry: {
       id: candidate.sessionId,
       type: label(candidate),
@@ -208,23 +223,36 @@ function descendants(rootThreadId: string, runtimes: AgentRuntime[]): AgentRunti
   return result
 }
 
-export function collectAgentEntries(
+export function collectAgentSnapshot(
   session: SessionInfo | null,
   env: NodeJS.ProcessEnv = process.env,
   now = new Date(),
-): AgentEntry[] {
+): AgentSnapshot {
   if (!session) {
-    return []
+    return { agents: [], activity: { active: false } }
   }
   const codexHome = getCodexHome(env)
   pruneTimedCache(rolloutCache, now.getTime(), ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES)
   const key = `${codexHome}:${session.id}`
   if (cache?.key === key && now.getTime() - cache.at < CACHE_MS) {
-    return structuredClone(cache.agents)
+    return structuredClone(cache.snapshot)
   }
 
-  const runtimes = listSessionCandidates(codexHome)
+  const candidates = listSessionCandidates(codexHome)
     .filter(candidate => isSubagentSource(candidate.source) && candidate.parentThreadId)
+  // Resolve ancestry before parsing; keep completed ancestors to reach active grandchildren.
+  const ids = new Set([session.id])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const candidate of candidates) {
+      if (ids.has(candidate.parentThreadId!) && !ids.has(candidate.sessionId)) {
+        ids.add(candidate.sessionId)
+        changed = true
+      }
+    }
+  }
+  const runtimes = candidates.filter(candidate => ids.has(candidate.sessionId))
     .flatMap((candidate) => {
       const runtime = parseAgent(candidate, now)
       return runtime ? [runtime] : []
@@ -248,8 +276,18 @@ export function collectAgentEntries(
       }
       queue.push(...(childrenByParent.get(child.entry.id) ?? []))
     }
-    return { ...runtime.entry, activeDescendantCount }
-  })
-  cache = { key, at: now.getTime(), agents }
-  return structuredClone(agents)
+    return runtime.visible || activeDescendantCount > 0 ? [{ ...runtime.entry, activeDescendantCount }] : []
+  }).flat()
+  const activity: AgentSnapshot['activity'] = { active: tree.some(runtime => runtime.active) }
+  for (const runtime of tree) {
+    if (!activity.lastActivityAt || runtime.lastActivityAt > activity.lastActivityAt)
+      activity.lastActivityAt = runtime.lastActivityAt
+  }
+  const snapshot = { agents, activity }
+  cache = { key, at: now.getTime(), snapshot }
+  return structuredClone(snapshot)
+}
+
+export function collectAgentEntries(session: SessionInfo | null, env = process.env, now = new Date()): AgentEntry[] {
+  return collectAgentSnapshot(session, env, now).agents
 }

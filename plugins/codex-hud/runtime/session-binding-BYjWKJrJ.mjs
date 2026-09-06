@@ -63,7 +63,7 @@ function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
 
 //#endregion
 //#region package.json
-var version = "0.10.0";
+var version = "0.10.1";
 
 //#endregion
 //#region src/version.ts
@@ -1522,10 +1522,16 @@ var RolloutParser = class {
 			return;
 		}
 		if (entry.type === "response_item") {
+			const payload = entry.payload;
+			if (this.state.session && (payload.role === "assistant" || payload.type !== "message")) this.state.session.lastActivityAt = timestamp;
 			this.onResponseItem(entry.payload, timestamp);
 			return;
 		}
-		if (entry.type === "event_msg") this.onEvent(entry.payload, timestamp);
+		if (entry.type === "event_msg") {
+			const payload = entry.payload;
+			if (this.state.session && payload.type !== "user_message") this.state.session.lastActivityAt = timestamp;
+			this.onEvent(entry.payload, timestamp);
+		}
 	}
 	onSessionMeta(payload, timestamp) {
 		const id = payload.session_id ?? payload.id;
@@ -1648,6 +1654,7 @@ var RolloutParser = class {
 		}
 		if (!this.state.session) return;
 		if (payload.type === "task_started") {
+			this.state.session.active = true;
 			this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp);
 			if (typeof payload.model_context_window === "number") this.latestTokenUsage = {
 				total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
@@ -1657,6 +1664,7 @@ var RolloutParser = class {
 			return;
 		}
 		if (payload.type === "task_complete" || payload.type === "turn_aborted") {
+			this.state.session.active = false;
 			this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp);
 			if (payload.type === "task_complete") this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt;
 			this.state.session.lastTurnDurationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : void 0;
@@ -5042,7 +5050,8 @@ const MESSAGES = {
 		mode: "Mode",
 		started: "Started",
 		lastResponse: "Last response",
-		lastCompleted: "Last completed",
+		lastCompleted: "Completed",
+		lastActive: "Last active",
 		input: "in",
 		cache: "cache",
 		output: "out",
@@ -5081,7 +5090,8 @@ const MESSAGES = {
 		mode: "模式",
 		started: "开始",
 		lastResponse: "最近响应",
-		lastCompleted: "最后完成",
+		lastCompleted: "完成时间",
+		lastActive: "最近活动",
 		input: "输入",
 		cache: "缓存",
 		output: "输出",
@@ -5390,11 +5400,13 @@ function renderSessionLine(ctx) {
 	const session = ctx.state.session;
 	const parts = [];
 	if (ctx.config.display.showDuration) parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
-	if (ctx.config.display.showLastCompletedAt && session?.lastCompletedAt) {
-		const date = session.lastCompletedAt;
+	const activityAt = session?.activity?.lastActivityAt ?? session?.lastCompletedAt;
+	if (ctx.config.display.showLastCompletedAt && activityAt) {
+		const date = activityAt;
 		const pad = (value) => String(value).padStart(2, "0");
 		const completed = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-		parts.push(color(`${message(ctx.config.language, "lastCompleted")}: ${completed}`, "cyan", ctx.options.color));
+		const label = session?.activity?.active ? "lastActive" : "lastCompleted";
+		parts.push(color(`${message(ctx.config.language, label)}: ${completed}`, "cyan", ctx.options.color));
 	}
 	if (ctx.config.display.showSessionStartDate && session?.startTime) {
 		const locale = ctx.config.language === "en" ? "en" : "zh-CN";
@@ -5783,6 +5795,7 @@ function readAgentRollout(candidate) {
 		cached.at = Date.now();
 		return {
 			active: cached.activeTurns.size > 0,
+			hasStarted: cached.hasStarted,
 			model: cached.model,
 			startedAt: new Date(cached.startedAt),
 			lastTimestamp: new Date(cached.lastTimestamp)
@@ -5794,6 +5807,7 @@ function readAgentRollout(candidate) {
 		size: 0,
 		tail: new JsonlTail(),
 		activeTurns: /* @__PURE__ */ new Set(),
+		hasStarted: false,
 		startedAt: candidate.startTime,
 		lastTimestamp: candidate.startTime
 	};
@@ -5801,6 +5815,7 @@ function readAgentRollout(candidate) {
 		const { lines, reset } = cached.tail.read(candidate.path);
 		if (reset) {
 			cached.activeTurns.clear();
+			cached.hasStarted = false;
 			cached.model = void 0;
 			cached.startedAt = candidate.startTime;
 			cached.lastTimestamp = candidate.startTime;
@@ -5822,11 +5837,17 @@ function readAgentRollout(candidate) {
 			}
 			if (entry.type !== "event_msg") continue;
 			if (payload.type === "task_started" && typeof payload.turn_id === "string") {
+				cached.hasStarted = true;
 				cached.activeTurns.add(payload.turn_id);
 				cached.startedAt = safeDate(payload.started_at, cached.lastTimestamp);
-			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
-			else if (payload.type === "turn_aborted") if (typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
-			else cached.activeTurns.clear();
+			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") {
+				cached.hasStarted = true;
+				cached.activeTurns.delete(payload.turn_id);
+			} else if (payload.type === "turn_aborted") {
+				cached.hasStarted = true;
+				if (typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
+				else cached.activeTurns.clear();
+			}
 		}
 	} catch {
 		return null;
@@ -5837,6 +5858,7 @@ function readAgentRollout(candidate) {
 	setTimedCache(rolloutCache, candidate.path, cached, ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const value = {
 		active: cached.activeTurns.size > 0,
+		hasStarted: cached.hasStarted,
 		model: cached.model,
 		startedAt: cached.startedAt,
 		lastTimestamp: cached.lastTimestamp
@@ -5848,11 +5870,12 @@ function parseAgent(candidate, now) {
 	if (!parsed) return null;
 	const active = parsed.active;
 	const ageMs = now.getTime() - candidate.mtimeMs;
-	const starting = !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime();
-	if (!active && !starting && ageMs > COMPLETED_VISIBLE_MS) return null;
+	const starting = !parsed.hasStarted && !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime();
 	return {
 		parentThreadId: candidate.parentThreadId ?? "",
-		active,
+		active: active || starting,
+		visible: active || starting || ageMs <= COMPLETED_VISIBLE_MS,
+		lastActivityAt: parsed.lastTimestamp,
 		entry: {
 			id: candidate.sessionId,
 			type: label(candidate),
@@ -5879,13 +5902,26 @@ function descendants(rootThreadId, runtimes) {
 	}
 	return result;
 }
-function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ new Date()) {
-	if (!session) return [];
+function collectAgentSnapshot(session, env = process.env, now = /* @__PURE__ */ new Date()) {
+	if (!session) return {
+		agents: [],
+		activity: { active: false }
+	};
 	const codexHome = getCodexHome(env);
 	pruneTimedCache(rolloutCache, now.getTime(), ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const key = `${codexHome}:${session.id}`;
-	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS) return structuredClone(cache$1.agents);
-	const runtimes = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId).flatMap((candidate) => {
+	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS) return structuredClone(cache$1.snapshot);
+	const candidates = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId);
+	const ids = /* @__PURE__ */ new Set([session.id]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const candidate of candidates) if (ids.has(candidate.parentThreadId) && !ids.has(candidate.sessionId)) {
+			ids.add(candidate.sessionId);
+			changed = true;
+		}
+	}
+	const runtimes = candidates.filter((candidate) => ids.has(candidate.sessionId)).flatMap((candidate) => {
 		const runtime = parseAgent(candidate, now);
 		return runtime ? [runtime] : [];
 	});
@@ -5904,17 +5940,23 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 			if (child.active || child.entry.status === "starting") activeDescendantCount += 1;
 			queue.push(...childrenByParent.get(child.entry.id) ?? []);
 		}
-		return {
+		return runtime.visible || activeDescendantCount > 0 ? [{
 			...runtime.entry,
 			activeDescendantCount
-		};
-	});
+		}] : [];
+	}).flat();
+	const activity = { active: tree.some((runtime) => runtime.active) };
+	for (const runtime of tree) if (!activity.lastActivityAt || runtime.lastActivityAt > activity.lastActivityAt) activity.lastActivityAt = runtime.lastActivityAt;
+	const snapshot = {
+		agents,
+		activity
+	};
 	cache$1 = {
 		key,
 		at: now.getTime(),
-		agents
+		snapshot
 	};
-	return structuredClone(agents);
+	return structuredClone(snapshot);
 }
 
 //#endregion
@@ -6221,6 +6263,24 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		sessionName: title ?? rollout.session.sessionName
 	} : null;
 	if (session && config.display.showModel) session.selectedModel = readSelectedModel(session, process.env, now.getTime()) ?? void 0;
+	const agentSnapshot = config.display.showAgents || config.display.showLastCompletedAt ? collectAgentSnapshot(session, process.env, now) : {
+		agents: [],
+		activity: {
+			active: false,
+			lastActivityAt: void 0
+		}
+	};
+	if (session) {
+		const dates = [
+			session.lastActivityAt,
+			session.lastCompletedAt,
+			agentSnapshot.activity.lastActivityAt
+		].filter((date) => Boolean(date));
+		session.activity = {
+			active: Boolean(session.active || agentSnapshot.activity.active),
+			lastActivityAt: dates.length ? new Date(Math.max(...dates.map((date) => date.getTime()))) : void 0
+		};
+	}
 	const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null;
 	return {
 		session,
@@ -6233,7 +6293,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		images: rollout.images,
 		skills: rollout.skills,
 		mcpServers: rollout.mcpServers,
-		agents: config.display.showAgents ? collectAgentEntries(session) : [],
+		agents: config.display.showAgents ? agentSnapshot.agents : [],
 		todos: rollout.todos,
 		goal: rollout.goal,
 		conversationTurns: rollout.conversationTurns,
@@ -6367,4 +6427,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-CxDseTPB.mjs.map
+//# sourceMappingURL=session-binding-BYjWKJrJ.mjs.map

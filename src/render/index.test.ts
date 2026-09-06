@@ -10,22 +10,35 @@ import { renderSessionLine } from './session-line.js'
 const now = new Date('2026-07-16T09:00:00Z')
 
 describe('last completion time', () => {
+  it('shows activity while any agent runs and completion as soon as all are idle', () => {
+    const value = state()
+    value.session!.activity = { active: true, lastActivityAt: new Date(2026, 8, 6, 2, 35) }
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderSessionLine(ctx)).toContain('Last active: 09-06 02:35')
+    ctx.config.language = 'zh-Hans'
+    expect(renderSessionLine(ctx)).toContain('最近活动: 09-06 02:35')
+    value.session!.activity.active = false
+    expect(renderSessionLine(ctx)).toContain('完成时间: 09-06 02:35')
+    ctx.config.language = 'en'
+    expect(renderSessionLine(ctx)).toContain('Completed: 09-06 02:35')
+  })
+
   it('shows a persistent local calendar time and supports hiding the metric', () => {
     const value = state()
     value.session!.lastCompletedAt = new Date(2026, 8, 6, 2, 35)
     const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
-    expect(renderSessionLine(ctx)).toContain('Last completed: 09-06 02:35')
+    expect(renderSessionLine(ctx)).toContain('Completed: 09-06 02:35')
     expect(renderSessionLine(ctx)).not.toContain('2026-')
     ctx.now = new Date(2026, 8, 7, 10, 0)
     ctx.config.language = 'zh-Hans'
-    expect(renderSessionLine(ctx)).toContain('最后完成: 09-06 02:35')
+    expect(renderSessionLine(ctx)).toContain('完成时间: 09-06 02:35')
     ctx.options.color = true
-    expect(renderSessionLine(ctx)).toContain('\u001B[36m最后完成: 09-06 02:35\u001B[0m')
+    expect(renderSessionLine(ctx)).toContain('\u001B[36m完成时间: 09-06 02:35\u001B[0m')
     ctx.config.display.showLastCompletedAt = false
-    expect(renderSessionLine(ctx)).not.toContain('最后完成')
+    expect(renderSessionLine(ctx)).not.toContain('完成时间')
     ctx.config.display.showLastCompletedAt = true
     value.session!.lastCompletedAt = undefined
-    expect(renderSessionLine(ctx)).not.toContain('最后完成')
+    expect(renderSessionLine(ctx)).not.toContain('完成时间')
   })
 })
 

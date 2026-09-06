@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.1 - 2026-09-06
+
+### Changed
+
+- The timestamp now shows `Last active` while the main agent or any descendant is running, and `Completed` when all are idle. Activity is aggregated across the exact task tree, independently of the subagent list toggle and its 30-second display retention. With the default one-second HUD refresh, state changes appear on the next refresh; the timestamp advances only when new activity is recorded. Completed means the agents have stopped, not a verification of task success.
+
+---
+
+### 调整
+
+- 时间指标现在汇总主代理及全部多层子代理：任一代理运行时显示“最近活动”，全部停止后显示“完成时间”。汇总不受子代理列表开关和完成后 30 秒隐藏规则影响；默认每秒刷新，状态变化在下一次刷新呈现，时间仅随新的活动记录更新。“完成”表示代理已停止活动，不代表任务结果已通过验收。
+
 ## 0.10.0 - 2026-09-05
 
 ### Added

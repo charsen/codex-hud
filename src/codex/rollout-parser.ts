@@ -386,10 +386,18 @@ export class RolloutParser {
       return
     }
     if (entry.type === 'response_item') {
+      const payload = entry.payload as ResponseItemPayload
+      if (this.state.session && (payload.role === 'assistant' || payload.type !== 'message')) {
+        this.state.session.lastActivityAt = timestamp
+      }
       this.onResponseItem(entry.payload as ResponseItemPayload, timestamp)
       return
     }
     if (entry.type === 'event_msg') {
+      const payload = entry.payload as EventMessagePayload
+      if (this.state.session && payload.type !== 'user_message') {
+        this.state.session.lastActivityAt = timestamp
+      }
       this.onEvent(entry.payload as EventMessagePayload, timestamp)
     }
   }
@@ -580,6 +588,7 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'task_started') {
+      this.state.session.active = true
       this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp)
       if (typeof payload.model_context_window === 'number') {
         this.latestTokenUsage = {
@@ -591,6 +600,7 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'task_complete' || payload.type === 'turn_aborted') {
+      this.state.session.active = false
       this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp)
       if (payload.type === 'task_complete') {
         this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt
