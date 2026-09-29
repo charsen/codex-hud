@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Restore the rollout discovery window for delayed shared app-server startup in Warp and verify existing-session exclusion and child cleanup.
+
 - [x] Refresh ChatGPT account quota independently of rollout activity; verify shared polling, failure freshness, account isolation, and monotonic observations.
 
 - [x] Make quota windows stable and persist trusted per-session endpoint evidence across HUD processes.

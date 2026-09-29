@@ -333,7 +333,9 @@ export async function runCodexChild(
         cwd,
         snapshot,
         codexHome,
-        allowModifiedSession ? 10_000 : 1_000,
+        // Shared app-server startup can take several seconds before the rollout
+        // appears, and its logs are not owned by the spawned TUI process.
+        10_000,
         discoveryController.signal,
         allowModifiedSession,
       )

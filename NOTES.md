@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-09-29
+
+- Symptom: a Warp tmux HUD shows only the project and elapsed time after Codex starts. Cause: new-session discovery stopped after one second, before Codex's shared app-server created the rollout; the TUI process's logs did not identify the server-owned thread. Fix: allow the existing ten-second discovery window for new sessions as well as resumes, retaining the launch snapshot and discovery lock. An already-running affected HUD can recover by binding its confirmed rollout without restarting Codex.
+
 ## 2026-09-06
 
 - Symptom: account quota reads work in a shell but fail after a cmux HUD pane respawn. Cause: GUI-spawned panes can inherit a minimal system `PATH` with a cmux Codex forwarding script but without Homebrew; npm's real Codex launcher also requires `node` on PATH. Fix: the quota reader prefers an explicit executable override or the executable recorded in managed installation metadata before PATH lookup, and prepends the running HUD's Node directory to its child PATH. Installation lookup rejects excluded paths and managed shims to avoid recursion.

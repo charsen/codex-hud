@@ -241,6 +241,42 @@ describe('non-interfering launcher', () => {
     expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
   })
 
+  it('binds a delayed app-server rollout before the child exits', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-delayed-child-'))
+    directories.push(root)
+    const cwd = path.join(root, 'project')
+    const codexHome = path.join(root, 'codex-home')
+    const sessions = path.join(codexHome, 'sessions', '2026', '07', '17')
+    const bindingPath = path.join(root, 'binding.json')
+    fs.mkdirSync(cwd)
+    fs.mkdirSync(sessions, { recursive: true })
+    const metadata = (id: string) => JSON.stringify({
+      type: 'session_meta',
+      payload: { id, timestamp: '2026-07-17T02:00:00Z', cwd, thread_source: 'user', source: 'vscode' },
+    })
+    fs.writeFileSync(path.join(sessions, 'rollout-existing.jsonl'), `${metadata('existing')}\n`)
+    const rolloutPath = path.join(sessions, 'rollout-delayed.jsonl')
+    const codex = executable(root, 'codex', [
+      'sleep 1.5',
+      `printf '%s\\n' '${metadata('delayed')}' > '${rolloutPath}'`,
+      'sleep 1',
+      'exit 17',
+    ].join('\n'))
+    process.env.CODEX_HOME = codexHome
+    process.env.CODEX_HUD_CODEX_BIN = codex
+
+    const child = runCodexChild([], null, false, cwd, bindingPath)
+    try {
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 3_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+      expect(readSessionBinding(bindingPath).codexPid).toBeGreaterThan(0)
+    }
+    finally {
+      expect(await child).toBe(17)
+    }
+    expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
+  })
+
   it('returns the child exit code when Codex exits before creating a rollout', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-child-'))
     directories.push(root)
