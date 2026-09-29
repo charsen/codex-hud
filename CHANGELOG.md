@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.10.3 - 2026-09-29
+
+### Fixed
+
+- Allow ten seconds for new-session rollout discovery so a delayed shared Codex app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
+- Validate managed installation metadata before using its runtime directory, and distinguish the built-in OpenAI provider from a custom relay also named `openai` when checking trusted authentication.
+
+---
+
+### 修复
+
+- 新会话记录的发现等待时间恢复为十秒，避免共享 Codex app-server 延迟启动时，Warp/tmux HUD 只显示项目和计时。
+- 使用运行时目录前校验托管安装元数据；判断可信认证时，区分内置 OpenAI provider 与同样命名为 `openai` 的自定义中继。
+
 ## 0.10.2 - 2026-09-06
 
 ### Fixed
