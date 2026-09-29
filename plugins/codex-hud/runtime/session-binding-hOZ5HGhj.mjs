@@ -1295,12 +1295,12 @@ function hasTrustedOpenAiAuth(session, env = process.env) {
 	} catch {
 		return false;
 	}
-	if (session.modelProvider?.toLowerCase() === "openai") return true;
 	try {
 		const configPath = path.join(getCodexHome(env), "config.toml");
 		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return false;
-		const config = record$2(parse(fs.readFileSync(configPath, "utf8")));
-		const provider = session.modelProvider ? record$2(record$2(config?.model_providers)?.[session.modelProvider]) : null;
+		const providers = record$2(record$2(parse(fs.readFileSync(configPath, "utf8")))?.model_providers);
+		const provider = session.modelProvider ? record$2(providers?.[session.modelProvider]) : null;
+		if (session.modelProvider?.toLowerCase() === "openai" && !provider) return true;
 		const baseUrl = typeof provider?.base_url === "string" ? provider.base_url : null;
 		return provider?.requires_openai_auth === true && (!baseUrl || isOfficialOpenAIEndpoint(baseUrl));
 	} catch {
@@ -6827,4 +6827,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-D0YdOTMG.mjs.map
+//# sourceMappingURL=session-binding-hOZ5HGhj.mjs.map

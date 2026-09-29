@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-D0YdOTMG.mjs";
+import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-hOZ5HGhj.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1776,7 +1776,7 @@ function statePath() {
 function readInstallState() {
 	try {
 		const state = JSON.parse(fs.readFileSync(statePath(), "utf8"));
-		return (state.version === 1 || state.version === 2) && Array.isArray(state.managedFiles) ? state : null;
+		return (state.version === 1 || state.version === 2) && Array.isArray(state.managedFiles) && (state.runtimeDirectory === void 0 || typeof state.runtimeDirectory === "string") ? state : null;
 	} catch {
 		return null;
 	}
