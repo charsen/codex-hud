@@ -2845,7 +2845,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		child.once("exit", (code) => finish(code ?? 1));
 	});
 	if (bindingPath && snapshot && release) try {
-		let rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, allowModifiedSession ? 1e4 : 1e3, discoveryController.signal, allowModifiedSession);
+		let rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e4, discoveryController.signal, allowModifiedSession);
 		if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession);
 		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
 	} finally {
