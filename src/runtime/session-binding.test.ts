@@ -4,9 +4,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   findNewRootSession,
+  findRootSessionById,
   readSessionBinding,
   snapshotRootSessions,
   waitForNewRootSession,
+  waitForRootSessionById,
   writeSessionBinding,
 } from './session-binding.js'
 
@@ -40,6 +42,25 @@ describe('managed session binding', () => {
     const created = writeSession(codexHome, 'created-by-this-launch', cwd, '2026-07-17T01:02:00Z')
 
     expect(findNewRootSession(cwd, snapshot, codexHome)?.path).toBe(created)
+  })
+
+  it('finds only the requested root ID in the launch project', async () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-id-'))
+    directories.push(codexHome)
+    const cwd = path.join(codexHome, 'project')
+    fs.mkdirSync(cwd)
+    const target = writeSession(codexHome, 'target', cwd, '2026-07-17T01:00:00Z')
+    writeSession(codexHome, 'other', cwd, '2026-07-17T01:01:00Z')
+    expect(findRootSessionById(cwd, 'target', codexHome)?.path).toBe(target)
+    expect(findRootSessionById(path.join(cwd, 'nested'), 'target', codexHome)).toBeNull()
+    const data = JSON.parse(fs.readFileSync(target, 'utf8'))
+    data.payload.source = { subagent: { thread_spawn: {} } }
+    fs.writeFileSync(target, `${JSON.stringify(data)}\n`)
+    expect(findRootSessionById(cwd, 'target', codexHome)).toBeNull()
+    const controller = new AbortController()
+    const waiting = waitForRootSessionById(cwd, 'missing', codexHome, controller.signal)
+    controller.abort()
+    expect(await waiting).toBeNull()
   })
 
   it('does not bind a session launched from a nested or sibling directory', () => {

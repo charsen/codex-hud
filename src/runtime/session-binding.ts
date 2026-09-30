@@ -27,6 +27,28 @@ function rootSessions(cwd: string, codexHome = getCodexHome()) {
     .filter(candidate => normalizedPath(candidate.cwd) === normalizedCwd)
 }
 
+export function findRootSessionById(cwd: string, sessionId: string, codexHome = getCodexHome()) {
+  return rootSessions(cwd, codexHome).find(candidate => candidate.sessionId === sessionId) ?? null
+}
+
+export async function waitForRootSessionById(
+  cwd: string,
+  sessionId: string,
+  codexHome = getCodexHome(),
+  signal?: AbortSignal,
+): Promise<string | null> {
+  while (true) {
+    if (signal?.aborted) {
+      return null
+    }
+    const session = findRootSessionById(cwd, sessionId, codexHome)
+    if (session) {
+      return session.path
+    }
+    await delay(250, signal)
+  }
+}
+
 export type SessionSnapshot = ReadonlyMap<string, number>
 
 export interface SessionStartWindow {

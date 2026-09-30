@@ -18,8 +18,10 @@ import { findExecutable } from './process.js'
 import {
   acquireSessionDiscoveryLock,
   createSessionBindingPath,
+  findRootSessionById,
   snapshotRootSessions,
   waitForNewRootSession,
+  waitForRootSessionById,
   writeSessionBinding,
 } from './session-binding.js'
 import {
@@ -33,11 +35,16 @@ import {
 const CODEX_OPTIONS_WITH_VALUES = new Set([
   '-C',
   '-c',
+  '-i',
   '-m',
   '-p',
   '--ask-for-approval',
   '--cd',
   '--config',
+  '--disable',
+  '--enable',
+  '--image',
+  '--local-provider',
   '--model',
   '--profile',
   '--sandbox',
@@ -52,21 +59,47 @@ function removeFile(filePath: string): void {
   }
 }
 
-export function isResumeInvocation(args: string[]): boolean {
+function resumeCommandIndex(args: string[]): number {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === '--') {
-      return false
+      return -1
     }
     if (CODEX_OPTIONS_WITH_VALUES.has(argument)) {
       index += 1
       continue
     }
     if (!argument.startsWith('-')) {
-      return argument === 'resume'
+      return argument === 'resume' ? index : -1
     }
   }
-  return false
+  return -1
+}
+
+export function isResumeInvocation(args: string[]): boolean {
+  return resumeCommandIndex(args) >= 0
+}
+
+export function explicitResumeSessionId(args: string[]): string | null {
+  const commandIndex = resumeCommandIndex(args)
+  if (commandIndex < 0) {
+    return null
+  }
+  for (let index = commandIndex + 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (CODEX_OPTIONS_WITH_VALUES.has(argument)) {
+      index += 1
+      continue
+    }
+    if (argument === '--') {
+      const value = args[index + 1] ?? ''
+      return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
+    }
+    if (!argument.startsWith('-')) {
+      return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(argument) ? argument.toLowerCase() : null
+    }
+  }
+  return null
 }
 
 export interface LaunchOptions {
@@ -307,15 +340,19 @@ export async function runCodexChild(
     waitForTmuxClient(sessionName)
   }
   const codexHome = getCodexHome(env)
-  const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null
-  const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null
+  const requestedSessionId = explicitResumeSessionId(args)
+  const requestedSession = bindingPath && requestedSessionId
+    ? findRootSessionById(cwd, requestedSessionId, codexHome)
+    : null
+  const release = bindingPath && !requestedSessionId ? await acquireSessionDiscoveryLock(cwd, env) : null
+  const snapshot = release ? snapshotRootSessions(cwd, codexHome) : null
   const allowModifiedSession = isResumeInvocation(args)
   const childStartedAt = Date.now()
   const child = spawn(codex, args, { cwd, stdio: 'inherit', env })
   if (bindingPath && child.pid) {
     // Codex only writes a rollout once the user sends a message, so publish the
     // process now: until then it is the HUD's only handle on this session.
-    writeSessionBinding(bindingPath, null, child.pid)
+    writeSessionBinding(bindingPath, requestedSession?.path ?? null, child.pid)
   }
   const discoveryController = new AbortController()
   let childExited = false
@@ -328,6 +365,14 @@ export async function runCodexChild(
     child.once('error', () => finish(1))
     child.once('exit', code => finish(code ?? 1))
   })
+  if (bindingPath && requestedSessionId && !requestedSession) {
+    // An explicit resume target is authoritative even before its rollout appears.
+    // Never substitute another session just because its file was updated.
+    const rolloutPath = await waitForRootSessionById(cwd, requestedSessionId, codexHome, discoveryController.signal)
+    if (rolloutPath) {
+      writeSessionBinding(bindingPath, rolloutPath, child.pid)
+    }
+  }
   if (bindingPath && snapshot && release) {
     let rolloutPath: string | null = null
     let discoveryEndedAt = childStartedAt

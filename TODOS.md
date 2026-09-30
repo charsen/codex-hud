@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Apply and verify the explicit resume-ID binding fix in the managed runtime.
+
 - [x] Discover first-message rollouts beyond the startup window without blocking or borrowing subsequent launches.
 
 - [x] Restore the rollout discovery window for delayed shared app-server startup in Warp and verify existing-session exclusion and child cleanup.

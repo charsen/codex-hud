@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.6 - 2026-09-30
+
+### Fixed
+
+- Bind an explicitly requested resume UUID to its existing root rollout before the first message; do not infer it from file update timing.
+
+---
+
+### 修复
+
+- 显式指定 UUID 恢复会话时，启动即绑定对应旧记录，无需等待首条消息或文件更新时间。
+
 ## 0.10.5 - 2026-09-30
 
 ### Fixed

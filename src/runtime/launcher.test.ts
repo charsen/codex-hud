@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  explicitResumeSessionId,
   installTerminationCleanup,
   isResumeInvocation,
   launchCodex,
@@ -118,6 +119,43 @@ describe('non-interfering launcher', () => {
     expect(waitForTmuxClient('session', 1_000, () => states.shift() ?? 1, value => pauses.push(value))).toBe(true)
     expect(pauses).toEqual([50, 50])
   })
+
+  it('extracts only an explicit resume UUID while skipping option values', () => {
+    const id = '01a0ed56-8fe3-7891-8748-c8f5e1f66c60'
+    expect(explicitResumeSessionId(['resume', id, '--dangerously-bypass-approvals-and-sandbox'])).toBe(id)
+    expect(explicitResumeSessionId(['--profile', 'resume', 'resume', '-i', 'image.png', id])).toBe(id)
+    expect(explicitResumeSessionId(['resume', '--', id.toUpperCase()])).toBe(id)
+    expect(explicitResumeSessionId(['resume', '--last'])).toBeNull()
+    expect(explicitResumeSessionId(['Explain resume support'])).toBeNull()
+  })
+
+  it('binds an explicit resume before the old rollout changes and preserves cleanup', async () => {
+    const { cwd, env } = fixture()
+    const sessions = path.join(env.CODEX_HOME!, 'sessions')
+    fs.mkdirSync(sessions, { recursive: true })
+    const id = '01a0ed56-8fe3-7891-8748-c8f5e1f66c60'
+    const rolloutPath = path.join(sessions, 'rollout-resumed.jsonl')
+    fs.writeFileSync(rolloutPath, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id, timestamp: '2026-09-29T13:24:30Z', cwd, source: 'vscode', thread_source: 'user' },
+    })}\n`)
+    const unchangedMtime = fs.statSync(rolloutPath).mtimeMs
+    const { codex, finish } = controlledChild(cwd, '')
+    env.CODEX_HUD_CODEX_BIN = codex
+    const bindingPath = path.join(cwd, 'binding.json')
+    const child = runCodexChild(['resume', id, '--dangerously-bypass-approvals-and-sandbox'], null, false, cwd, bindingPath, env)
+    try {
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 5_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+      expect(fs.statSync(rolloutPath).mtimeMs).toBe(unchangedMtime)
+      expect(fs.existsSync(path.join(env.CODEX_HOME!, 'codex-hud', 'bindings', 'locks'))).toBe(false)
+    }
+    finally {
+      finish()
+      expect(await child).toBe(17)
+    }
+    expect(fs.existsSync(bindingPath)).toBe(false)
+  }, 10_000)
 
   it('runs official Codex directly when tmux is unavailable', async () => {
     const { cwd, env, output } = fixture()

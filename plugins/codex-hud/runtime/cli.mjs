@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-c9PWyMzw.mjs";
+import { A as readLatestLoggedRateLimits, B as shellCommand, C as rawConfigVersion, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, I as selectAccountUsage, J as resolveSessionEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, N as resolveUsageData, O as inspectLoggedRateLimitTargets, Q as getLegacyStateDirectory, R as HUD_VERSION, S as applyConfigMigrations, T as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, U as findCodexLogDatabase, V as shellQuote, W as inspectCodexLogSchema, X as getConfigPath, Y as getCodexHome, Z as getHudStateDirectory, a as snapshotRootSessions, b as loadConfig, c as writeSessionBinding, g as renderHud, k as persistRolloutRateLimits, l as buildHudState, n as createSessionBindingPath, o as waitForNewRootSession, r as findRootSessionById, s as waitForRootSessionById, t as acquireSessionDiscoveryLock, w as DEFAULT_CONFIG, z as findExecutable } from "./session-binding-DtfWd0GR.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -2617,11 +2617,16 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 const CODEX_OPTIONS_WITH_VALUES = /* @__PURE__ */ new Set([
 	"-C",
 	"-c",
+	"-i",
 	"-m",
 	"-p",
 	"--ask-for-approval",
 	"--cd",
 	"--config",
+	"--disable",
+	"--enable",
+	"--image",
+	"--local-provider",
 	"--model",
 	"--profile",
 	"--sandbox"
@@ -2631,17 +2636,37 @@ function removeFile(filePath) {
 		fs.rmSync(filePath, { force: true });
 	} catch {}
 }
-function isResumeInvocation(args) {
+function resumeCommandIndex(args) {
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
-		if (argument === "--") return false;
+		if (argument === "--") return -1;
 		if (CODEX_OPTIONS_WITH_VALUES.has(argument)) {
 			index += 1;
 			continue;
 		}
-		if (!argument.startsWith("-")) return argument === "resume";
+		if (!argument.startsWith("-")) return argument === "resume" ? index : -1;
 	}
-	return false;
+	return -1;
+}
+function isResumeInvocation(args) {
+	return resumeCommandIndex(args) >= 0;
+}
+function explicitResumeSessionId(args) {
+	const commandIndex = resumeCommandIndex(args);
+	if (commandIndex < 0) return null;
+	for (let index = commandIndex + 1; index < args.length; index += 1) {
+		const argument = args[index];
+		if (CODEX_OPTIONS_WITH_VALUES.has(argument)) {
+			index += 1;
+			continue;
+		}
+		if (argument === "--") {
+			const value = args[index + 1] ?? "";
+			return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null;
+		}
+		if (!argument.startsWith("-")) return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(argument) ? argument.toLowerCase() : null;
+	}
+	return null;
 }
 const TERMINATION_SIGNALS = [
 	"SIGINT",
@@ -2833,8 +2858,10 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 	if (!codex) return 127;
 	if (waitForClient && sessionName && process$1.env.TMUX) waitForTmuxClient(sessionName);
 	const codexHome = getCodexHome(env);
-	const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null;
-	const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null;
+	const requestedSessionId = explicitResumeSessionId(args);
+	const requestedSession = bindingPath && requestedSessionId ? findRootSessionById(cwd, requestedSessionId, codexHome) : null;
+	const release = bindingPath && !requestedSessionId ? await acquireSessionDiscoveryLock(cwd, env) : null;
+	const snapshot = release ? snapshotRootSessions(cwd, codexHome) : null;
 	const allowModifiedSession = isResumeInvocation(args);
 	const childStartedAt = Date.now();
 	const child = spawn(codex, args, {
@@ -2842,7 +2869,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		stdio: "inherit",
 		env
 	});
-	if (bindingPath && child.pid) writeSessionBinding(bindingPath, null, child.pid);
+	if (bindingPath && child.pid) writeSessionBinding(bindingPath, requestedSession?.path ?? null, child.pid);
 	const discoveryController = new AbortController();
 	let childExited = false;
 	const exitCodePromise = new Promise((resolve) => {
@@ -2854,6 +2881,10 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		child.once("error", () => finish(1));
 		child.once("exit", (code) => finish(code ?? 1));
 	});
+	if (bindingPath && requestedSessionId && !requestedSession) {
+		const rolloutPath = await waitForRootSessionById(cwd, requestedSessionId, codexHome, discoveryController.signal);
+		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
+	}
 	if (bindingPath && snapshot && release) {
 		let rolloutPath = null;
 		let discoveryEndedAt = childStartedAt;
