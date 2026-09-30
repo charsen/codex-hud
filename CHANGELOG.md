@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.7 - 2026-09-30
+
 ### Fixed
 
 - Wait up to ten seconds for a new Codex session's rollout so delayed shared app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
