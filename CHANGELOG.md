@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.7 - 2026-09-30
+
+### Fixed
+
+- Disable plugin loading in quota-only app-server readers to prevent repeated marketplace staging copies; shut readers down normally with bounded process-tree cleanup.
+
+---
+
+### 修复
+
+- 额度查询专用 app-server 禁用插件加载，避免反复生成市场暂存副本；正常关闭查询进程，并为进程树清理设置超时兜底。
+
 ## 0.10.6 - 2026-09-30
 
 ### Fixed

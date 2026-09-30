@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Stop quota polling from creating marketplace upgrade copies and refresh running HUD renderers.
+
 - [x] Apply and verify the explicit resume-ID binding fix in the managed runtime.
 
 - [x] Discover first-message rollouts beyond the startup window without blocking or borrowing subsequent launches.

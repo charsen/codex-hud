@@ -1452,7 +1452,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.10.6";
+var version = "0.10.7";
 
 //#endregion
 //#region src/version.ts
@@ -1723,6 +1723,10 @@ function queryAccountRateLimits(env, accountId) {
 	return new Promise((resolve) => {
 		const child = spawn(executable, [
 			"app-server",
+			"--disable",
+			"plugins",
+			"--disable",
+			"remote_plugin",
 			"-c",
 			"chatgpt_base_url=\"https://chatgpt.com/backend-api/\""
 		], {
@@ -1735,24 +1739,52 @@ function queryAccountRateLimits(env, accountId) {
 				"pipe",
 				"pipe",
 				"ignore"
-			]
+			],
+			detached: process.platform !== "win32"
 		});
 		let done = false;
+		let closed = false;
+		let settled = false;
+		let result = null;
 		let buffer = "";
 		let bytes = 0;
 		let expectedId = 0;
 		let timeout;
-		const kill = () => {
-			child.kill("SIGKILL");
+		let terminateTimeout;
+		let killTimeout;
+		const signalTree = (signal) => {
+			try {
+				if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
+				else child.kill(signal);
+			} catch {}
+		};
+		const kill = () => signalTree("SIGKILL");
+		const settle = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			clearTimeout(terminateTimeout);
+			clearTimeout(killTimeout);
+			process.off("exit", kill);
+			resolve(result);
 		};
 		const finish = (value) => {
 			if (done) return;
 			done = true;
+			result = value;
 			clearTimeout(timeout);
-			process.off("exit", kill);
-			child.stdin.destroy();
-			kill();
-			resolve(value);
+			if (closed) {
+				settle();
+				return;
+			}
+			terminateTimeout = setTimeout(() => {
+				signalTree("SIGTERM");
+				killTimeout = setTimeout(() => {
+					kill();
+					settle();
+				}, 1e3);
+			}, 1e3);
+			child.stdin.end();
 		};
 		timeout = setTimeout(finish, ACCOUNT_USAGE_TIMEOUT_MS, null);
 		process.once("exit", kill);
@@ -1760,7 +1792,11 @@ function queryAccountRateLimits(env, accountId) {
 			child.stdin.write(`${JSON.stringify(value)}\n`);
 		};
 		child.on("error", () => finish(null));
-		child.on("close", () => finish(null));
+		child.on("close", () => {
+			closed = true;
+			if (!done) finish(null);
+			settle();
+		});
 		child.stdin.on("error", () => finish(null));
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk) => {
@@ -6838,4 +6874,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readLatestLoggedRateLimits as A, shellCommand as B, rawConfigVersion as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, applyConfigMigrations as S, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, truncateAnsi as _, snapshotRootSessions as a, loadConfig as b, writeSessionBinding as c, hudRenderHeight as d, readCmuxPaneGeometry as f, renderHud as g, settleCmuxPaneHeight as h, readSessionBinding as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, buildHudState as l, resizeHudPane as m, createSessionBindingPath as n, waitForNewRootSession as o, resizeCmuxPane as p, resolveProcessSession as q, findRootSessionById as r, waitForRootSessionById as s, acquireSessionDiscoveryLock as t, desiredPaneHeight as u, visibleWidth as v, DEFAULT_CONFIG as w, reloadConfig as x, sliceAnsi as y, findExecutable as z };
-//# sourceMappingURL=session-binding-DtfWd0GR.mjs.map
+//# sourceMappingURL=session-binding-CP2KyZi4.mjs.map

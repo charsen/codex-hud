@@ -2,6 +2,8 @@
 
 ## 2026-09-30
 
+- Symptom: minute-by-minute quota reads accumulate marketplace upgrade copies in Codex temporary storage. Cause: the quota reader starts app-server with plugin loading enabled and immediately SIGKILLs its launcher after a response. Fix: disable local and remote plugins for that reader only, close stdin normally, and bound shutdown with process-group termination so npm descendants are included.
+
 - Symptom: an explicit resume command leaves the HUD showing only project and elapsed time after the first reply. Cause: UUID arguments were ignored and shared-server resumes were inferred from rollout updates within ten seconds. Fix: resolve the requested root UUID directly, preserving process cleanup and excluding other sessions.
 
 - Symptom: the Warp HUD remains without session data when the first message is sent more than ten seconds after launch. Cause: the shared app-server defers the rollout file until that message, and TUI process logs cannot identify the server-owned thread. Fix: release the startup discovery lock after ten seconds and keep discovering only threads started within that launch window; thread timestamps prevent borrowing delayed earlier or later launches.
