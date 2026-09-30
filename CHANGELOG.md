@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.5 - 2026-09-30
+
+### Fixed
+
+- Complete the Warp/tmux delayed-first-message rollout fix release with launcher fixtures that remain alive until binding is verified, eliminating the Node 20 CI race while retaining child-exit cleanup assertions.
+
+---
+
+### 修复
+
+- 修复启动测试夹具在确认绑定前提前退出的时序问题，保留子进程退出清理断言，消除 Node 20 CI 竞态，完成 Warp/tmux 首条消息延迟时的会话发现修复发布。
+
 ## 0.10.4 - 2026-09-30
 
 ### Fixed
