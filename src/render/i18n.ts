@@ -2,6 +2,7 @@ import type { Language } from '../types/config.js'
 
 const MESSAGES = {
   'en': {
+    runningModel: 'running',
     context: 'Context',
     usage: 'Usage',
     usageCached: 'cached',
@@ -35,6 +36,8 @@ const MESSAGES = {
     mode: 'Mode',
     started: 'Started',
     lastResponse: 'Last response',
+    lastCompleted: 'Completed',
+    lastActive: 'Last active',
     input: 'in',
     cache: 'cache',
     output: 'out',
@@ -42,6 +45,7 @@ const MESSAGES = {
     navigate: 'click HUD or press F12, then n',
   },
   'zh-Hans': {
+    runningModel: '本轮执行',
     context: '上下文',
     usage: '额度',
     usageCached: '缓存',
@@ -75,6 +79,8 @@ const MESSAGES = {
     mode: '模式',
     started: '开始',
     lastResponse: '最近响应',
+    lastCompleted: '完成时间',
+    lastActive: '最近活动',
     input: '输入',
     cache: '缓存',
     output: '输出',

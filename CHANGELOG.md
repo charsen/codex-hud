@@ -2,75 +2,33 @@
 
 ## [Unreleased]
 
+## 0.10.4 - 2026-09-30
+
 ### Fixed
 
 - Keep discovering a new session's first-message rollout after the ten-second startup window, using thread start times to exclude earlier and later launches while releasing the discovery lock for other sessions.
-- Wait up to ten seconds for a new Codex session's rollout so delayed shared app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
 
 ---
 
 ### 修复
 
 - 首条消息晚于十秒启动窗口时继续发现新会话记录，以线程启动时间排除前后其他会话，同时释放发现锁，避免阻塞后续启动。
-- 新 Codex 会话的记录发现等待时间恢复为十秒，避免共享 app-server 延迟启动时，Warp/tmux HUD 只显示项目和计时。
 
-## 0.9.6 - 2026-09-19
+## 0.10.3 - 2026-09-29
 
 ### Fixed
 
-- Match paths on WSL Windows drive mounts case-insensitively while discovering and binding sessions, resolving process-owned rollouts, and deduplicating workspace roots. A casing difference between the launch directory and Codex state no longer leaves the HUD without session data.
+- Allow ten seconds for new-session rollout discovery so a delayed shared Codex app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
+- Validate managed installation metadata before using its runtime directory, and distinguish the built-in OpenAI provider from a custom relay also named `openai` when checking trusted authentication.
 
 ---
 
 ### 修复
 
-- 在 WSL Windows 盘挂载路径上以不区分大小写的方式发现并绑定会话、解析进程所属 rollout，以及去重工作区根目录。启动目录与 Codex 状态中的路径大小写不一致时，HUD 不再丢失会话数据。
+- 新会话记录的发现等待时间恢复为十秒，避免共享 Codex app-server 延迟启动时，Warp/tmux HUD 只显示项目和计时。
+- 使用运行时目录前校验托管安装元数据；判断可信认证时，区分内置 OpenAI provider 与同样命名为 `openai` 的自定义中继。
 
-## 0.9.5 - 2026-09-13
-
-### Fixed
-
-- Keep an already identified API-key relay name visible when CC Switch rewrites `config.toml` during a session. Retain only a session-scoped origin in HUD memory; newer official endpoint evidence supersedes it. Credential reads, relay-query authorization, and ChatGPT subscription quota trust remain unchanged.
-
----
-
-### 修复
-
-- 会话运行期间 CC Switch 改写 `config.toml` 后，保留已识别的 API Key 中转站名称。仅在 HUD 内存中按会话保留 origin，新的官方 endpoint 证据会取代旧身份；凭据读取、中转查询授权与 ChatGPT 订阅额度信任规则保持不变。
-
-## 0.9.4 - 2026-09-11
-
-### Fixed
-
-- Recognize an API-key credential that Codex reads inline from `config.toml`, either as an `experimental_bearer_token` or through an `env_key` naming the variable. Sessions configured this way resolved to no authentication, so the first line omitted the provider name and the relay balance query never ran.
-- Reuse that credential for relay balance queries, so a provider that keeps its key inline is no longer treated as having nothing to query with.
-- Keep the existing evidence guards unchanged: a `config.toml` rewritten after the session started is never attributed to it, a credential is never rendered, and a cache key stores only its hash.
-
----
-
-### 修复
-
-- 识别 Codex 从 `config.toml` 内联读取的 API-key 凭据，包括 `experimental_bearer_token` 与指向环境变量的 `env_key` 两种写法。此前这类会话会被判为“无凭据”，导致首行缺少中转站名称，余额查询也不会发起。
-- 让中转站余额查询复用同一凭据，使以内联方式保存密钥的中转站不再被当作无从查询。
-- 原有证据守卫保持不变：会话开始后被重写过的 `config.toml` 不归属该会话，凭据不参与渲染，缓存键仅保存其哈希。
-
-## 0.9.3 - 2026-09-08
-
-### Fixed
-
-- Restore conversation turn counts and history navigation for current Codex rollout logs by parsing `response_item.message` and `item_completed` user/assistant records without double-counting mirrored events.
-- Handle case-insensitive completed-message text blocks and multimodal user inputs such as image-only prompts, while continuing to exclude injected environment and developer context.
-- Count current `ContextCompaction` completion items as well as legacy compaction events, with duplicate item IDs ignored.
-
----
-
-### 修复
-
-- 解析当前 Codex rollout 日志中的 `response_item.message` 和 `item_completed` 用户/助手记录，并去除镜像事件重复计数，恢复会话轮次和历史导航。
-- 兼容大小写不同的完成消息文本块及仅包含图片的多模态用户输入，同时继续排除注入的环境上下文和 developer 指令。
-- 同时统计新版 `ContextCompaction` 完成项和旧版压缩事件，并忽略重复的完成项 ID。
-
-## 0.9.2 - 2026-09-07
+## 0.10.2 - 2026-09-06
 
 ### Fixed
 
@@ -86,11 +44,55 @@
 - 查询失败后保留最近成功额度及其观测时间，并为失败或陈旧的记录标注缓存状态。旧观测不再覆盖新值，额度重置和完整账户快照可清除原有限制。
 - cmux 以精简 PATH 或 Codex 转发脚本启动面板时，使用受管理的 Codex 程序与 HUD 自身的 Node 运行时完成额度查询。
 
-## 0.9.1 - 2026-09-05
+## 0.10.1 - 2026-09-06
+
+### Changed
+
+- The timestamp now shows `Last active` while the main agent or any descendant is running, and `Completed` when all are idle. Activity is aggregated across the exact task tree, independently of the subagent list toggle and its 30-second display retention. With the default one-second HUD refresh, state changes appear on the next refresh; the timestamp advances only when new activity is recorded. Completed means the agents have stopped, not a verification of task success.
+
+---
+
+### 调整
+
+- 时间指标现在汇总主代理及全部多层子代理：任一代理运行时显示“最近活动”，全部停止后显示“完成时间”。汇总不受子代理列表开关和完成后 30 秒隐藏规则影响；默认每秒刷新，状态变化在下一次刷新呈现，时间仅随新的活动记录更新。“完成”表示代理已停止活动，不代表任务结果已通过验收。
+
+## 0.10.0 - 2026-09-05
 
 ### Added
 
-- Right-aligned the current HUD version on the last visible line when the terminal has spare width, while keeping narrow layouts focused on existing telemetry.
+- Added a configurable, cyan-highlighted last-completion timestamp beside session duration, with English/Chinese labels and local `MM-DD HH:mm` time. It records normal turn completion, survives HUD restarts, and is not overwritten by intermediate replies or aborted turns. Enable or hide it with `lastCompleted` in the display configuration.
+
+---
+
+### 新增
+
+- 在会话时长旁新增可开关、青色高亮的“最后完成”时间，适配中英文标签，使用本机时区的 `MM-DD HH:mm` 格式，不显示年份。仅记录正常轮次结束，重启 HUD 后仍可恢复，中途回复与中断不会覆盖；可通过显示配置中的 `lastCompleted` 开关控制。
+
+## 0.9.4 - 2026-09-05
+
+### Fixed
+
+- Refresh the selected model and reasoning effort from the current thread's settings when switching models mid-session. If an active turn still uses the previous model, show it separately as `running` until the turn ends or the models agree. Older or unavailable state databases retain rollout-based display.
+
+---
+
+### 修复
+
+- 会话中途切换模型时，从当前会话设置刷新已选择的模型与推理强度；若正在执行的轮次仍使用旧模型，则单独标注“本轮执行”，直到该轮结束或模型一致。状态数据库版本较旧或不可用时，保持基于轮次记录的显示。
+
+## 0.9.3 - 2026-09-05
+
+### Added
+
+- Right-aligned the current HUD version on the last visible line when the terminal has spare width, while keeping a one-column terminal safety margin and prioritizing telemetry on narrow layouts.
+
+---
+
+### 新增
+
+- 终端宽度充足时，在最后一条可见行的右侧显示当前 HUD 版本，并保留一列终端安全边距；窄布局仍优先保留既有遥测内容。
+
+## 0.9.2 - 2026-09-05
 
 ### Fixed
 
@@ -98,13 +100,21 @@
 
 ---
 
-### 新增
-
-- 终端宽度充足时，在最后一条可见行的右侧显示当前 HUD 版本；窄布局仍优先保留既有遥测内容。
-
 ### 修复
 
 - 所有存活 HUD 会话现在都会采用最新的账户级额度观测；其他会话发布更新后，过期的进程内缓存或更旧的 tracing 日志事件不再导致用量停滞或倒退。
+
+## 0.9.1 - 2026-09-05
+
+### Fixed
+
+- Kept account-wide ChatGPT quota windows separate from named model-specific limits, and shared fresh rollout observations across official-endpoint HUD sessions when Codex writes no account limit event to its tracing log.
+
+---
+
+### 修复
+
+- 将 ChatGPT 账户级额度窗口与具名模型专属额度分开处理；当 Codex 未把账户额度事件写入 tracing 日志时，在同一官方端点的 HUD 会话之间共享 rollout 中的新鲜账户额度。
 
 ## 0.9.0 - 2026-09-05
 
@@ -122,7 +132,6 @@
 
 ### Fixed
 
-- Kept account-wide ChatGPT quota windows separate from named model-specific limits, and shared fresh rollout observations across official-endpoint HUD sessions when Codex writes no account limit event to its tracing log.
 - Persisted the last confirmed origin for each active session, with bounded atomic state and schema-aware fallback, so log rotation or compaction no longer makes valid 5-hour and weekly usage disappear.
 - Redacted sensitive command text from HUD output and restricted relay credentials to HTTPS endpoints, while retaining explicit localhost development support.
 - Recorded managed runtime versions and checksums during setup so stale or partially replaced installations can be identified reliably.
@@ -143,7 +152,6 @@
 
 ### 修复
 
-- 将 ChatGPT 账户级额度窗口与具名模型专属额度分开处理；当 Codex 未把账户额度事件写入 tracing 日志时，在同一官方端点的 HUD 会话之间共享 rollout 中的新鲜账户额度。
 - 按活动会话持久化最近一次已确认的 origin，并使用有界、原子和 schema 感知的状态回退；日志轮换或压缩后，有效的 5 小时与周额度不再消失。
 - HUD 输出会遮蔽敏感命令文本；中转凭据仅允许发送到 HTTPS 端点，同时保留显式的 localhost 本地开发支持。
 - setup 会记录托管 runtime 版本与 checksum，能够可靠识别陈旧或替换不完整的安装。

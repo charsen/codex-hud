@@ -806,85 +806,6 @@ function getLegacyStateDirectory(env = process.env) {
 }
 
 //#endregion
-//#region src/codex/provider-credentials.ts
-function record$3(value) {
-	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-function nonEmptyString(value) {
-	return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-/**
-* config.toml is only evidence about a session while it has not been rewritten
-* since that session started. A newer file may describe a provider the user
-* switched to afterwards, and before a session is bound there is nothing to
-* attribute the file to — that window is exactly Codex's startup, when a
-* provider the user just switched away from is still the newest thing on disk.
-*/
-function readActiveProviderConfig(session, env = process.env) {
-	if (!session) return null;
-	try {
-		const configPath = path.join(getCodexHome(env), "config.toml");
-		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
-		const config = record$3(parse(fs.readFileSync(configPath, "utf8")));
-		const name = session.modelProvider ?? nonEmptyString(config?.model_provider);
-		if (!name) return null;
-		const provider = record$3(record$3(config?.model_providers)?.[name]);
-		if (!provider) return name.toLowerCase() === "openai" ? {
-			name,
-			baseUrl: null,
-			inlineToken: null,
-			envKey: null
-		} : null;
-		return {
-			name,
-			baseUrl: nonEmptyString(provider.base_url),
-			inlineToken: nonEmptyString(provider.experimental_bearer_token),
-			envKey: nonEmptyString(provider.env_key)
-		};
-	} catch {
-		return null;
-	}
-}
-/**
-* The credential a resolved provider authenticates with, when it does not come
-* from `OPENAI_API_KEY` or `auth.json`. Never returned for rendering: callers
-* use it to reach the relay the session already talks to, and a query stores it
-* only as a hash when it needs a cache key.
-*/
-function providerCredential(provider, env = process.env) {
-	if (!provider) return null;
-	if (provider.inlineToken) return provider.inlineToken;
-	if (provider.envKey) return nonEmptyString(env[provider.envKey]);
-	return null;
-}
-/** `providerCredential` for a session, resolving the provider from `config.toml` first. */
-function configuredProviderCredential(session, env = process.env) {
-	return providerCredential(readActiveProviderConfig(session, env), env);
-}
-
-//#endregion
-//#region src/runtime/path-identity.ts
-const WSL_WINDOWS_DRIVE_PATH = /^\/mnt\/[a-z](?:\/|$)/i;
-function isWsl(env) {
-	if (process.platform !== "linux") return false;
-	return Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP) || os.release().toLowerCase().includes("microsoft");
-}
-/** Paths backed by a case-insensitive filesystem need a stable comparison key. */
-function isCaseInsensitivePath(value, env = process.env) {
-	if (process.platform === "win32") return true;
-	return isWsl(env) && WSL_WINDOWS_DRIVE_PATH.test(path.resolve(value));
-}
-function pathIdentity(value, env = process.env) {
-	let resolved;
-	try {
-		resolved = fs.realpathSync.native(value);
-	} catch {
-		resolved = path.resolve(value);
-	}
-	return isCaseInsensitivePath(resolved, env) ? resolved.toLowerCase() : resolved;
-}
-
-//#endregion
 //#region src/runtime/timed-cache.ts
 function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
 	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
@@ -1108,7 +1029,7 @@ function shellSql(value) {
 */
 function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
 	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const cacheKey = `${getCodexHome(env)}:${codexPid}:${pathIdentity(cwd, env)}`;
+	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
 	const cached = processSessionCache.get(cacheKey);
 	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
 	const remember = (value) => {
@@ -1132,14 +1053,11 @@ function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Da
 	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
 	if (ids.length === 0) return remember(null);
 	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
-	const stateDatabase = path.join(getCodexHome(env), "state_5.sqlite");
-	const resolvedCwd = path.resolve(cwd);
-	const cwdColumn = isCaseInsensitivePath(resolvedCwd, env) ? "cwd COLLATE NOCASE" : "cwd";
-	const rows = query(stateDatabase, [
+	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
 		"SELECT id || '|' || rollout_path",
 		"  FROM threads",
 		` WHERE id IN (${candidates})`,
-		`   AND ${cwdColumn} = '${shellSql(resolvedCwd)}'`,
+		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
 		"   AND (thread_source = 'user' OR thread_source IS NULL)",
 		"   AND (agent_path IS NULL OR agent_path = '')",
 		" ORDER BY created_at_ms ASC, id ASC",
@@ -1263,7 +1181,6 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 //#region src/collectors/session-metadata.ts
 const titleCache = /* @__PURE__ */ new Map();
 const authCache = /* @__PURE__ */ new Map();
-const relayIdentityCache = /* @__PURE__ */ new Map();
 const METADATA_CACHE_MS = 3e4;
 const METADATA_CACHE_MAX_AGE_MS = 30 * 6e4;
 const METADATA_CACHE_MAX_ENTRIES = 256;
@@ -1333,6 +1250,26 @@ function isChatGptEndpoint(baseUrl) {
 		return false;
 	}
 }
+/**
+* The endpoint declared in config.toml is only evidence about a session if the
+* file has not been rewritten since Codex read it at session start. Before a
+* session is bound the HUD has nothing to attribute the file to, so it must not
+* borrow the label: that window is exactly Codex's startup, when a provider the
+* user just switched away from is still the newest thing on disk.
+*/
+function configuredBaseUrl(session, env) {
+	try {
+		const configPath = path.join(getCodexHome(env), "config.toml");
+		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
+		const config = record$2(parse(fs.readFileSync(configPath, "utf8")));
+		const providerName = session?.modelProvider ?? (typeof config?.model_provider === "string" ? config.model_provider : null);
+		if (!providerName) return null;
+		const provider = record$2(record$2(config?.model_providers)?.[providerName]);
+		return typeof provider?.base_url === "string" ? provider.base_url : null;
+	} catch {
+		return null;
+	}
+}
 function hasApiKeyCredential(env = process.env) {
 	if (env.OPENAI_API_KEY) return true;
 	try {
@@ -1351,7 +1288,7 @@ function hasChatGptCredential(auth) {
 	].some((key) => typeof tokens?.[key] === "string" && Boolean(tokens[key]));
 }
 function hasTrustedOpenAiAuth(session, env = process.env) {
-	if (!session || hasApiKeyCredential(env) || configuredProviderCredential(session, env)) return false;
+	if (!session || hasApiKeyCredential(env)) return false;
 	try {
 		const auth = record$2(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
 		if (!auth || !hasChatGptCredential(auth)) return false;
@@ -1371,11 +1308,7 @@ function hasTrustedOpenAiAuth(session, env = process.env) {
 	}
 }
 function collectAuthInfo(planType, session = null, env = process.env, codexProcess = null) {
-	const provider = readActiveProviderConfig(session, env);
-	const hasProviderCredential = providerCredential(provider, env) !== null;
-	const sessionScope = session ? `${session.id}:${session.startTime.getTime()}:${session.modelProvider ?? ""}` : `${codexProcess?.pid ?? ""}`;
-	const identityKey = `${getCodexHome(env)}:${sessionScope}`;
-	const cacheKey = `${identityKey}:${planType ?? ""}:${Boolean(env.OPENAI_API_KEY)}:${provider?.name ?? ""}`;
+	const cacheKey = `${getCodexHome(env)}:${planType ?? ""}:${session?.id ?? codexProcess?.pid ?? ""}:${Boolean(env.OPENAI_API_KEY)}`;
 	const cached = authCache.get(cacheKey);
 	if (cached && Date.now() - cached.at < METADATA_CACHE_MS) return cached.value ? structuredClone(cached.value) : null;
 	const authPath = path.join(getCodexHome(env), "auth.json");
@@ -1383,17 +1316,14 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 	try {
 		auth = record$2(JSON.parse(fs.readFileSync(authPath, "utf8"))) ?? {};
 	} catch {}
+	const hasApiKey = hasApiKeyCredential(env);
 	const user = jwtUser(auth) ?? findString(auth, /* @__PURE__ */ new Set([
 		"email",
 		"preferred_username",
 		"username"
 	]))?.split("@")[0];
 	const endpoint = session ? resolveSessionEndpoint(session.id, env) : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env);
-	const resolvedUrl = session ? endpoint?.url ?? provider?.baseUrl ?? null : endpoint?.url ?? null;
-	if (session && isOfficialOpenAIEndpoint(resolvedUrl)) relayIdentityCache.delete(identityKey);
-	const identity = session ? relayIdentityCache.get(identityKey) : void 0;
-	const baseUrl = resolvedUrl ?? identity?.origin ?? null;
-	const hasApiKey = hasApiKeyCredential(env) || hasProviderCredential || Boolean(identity);
+	const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null;
 	if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
 		const value = {
 			method: `ChatGPT ${planType}`,
@@ -1406,11 +1336,6 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 		return structuredClone(value);
 	}
 	if (hasApiKey) {
-		const origin = baseUrl ? endpointOrigin(baseUrl) : null;
-		if (session && origin && !isOfficialOpenAIEndpoint(origin)) setTimedCache(relayIdentityCache, identityKey, {
-			at: Date.now(),
-			origin
-		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		const value = { method: (baseUrl ? providerLabel(baseUrl) : null) || "API Key" };
 		setTimedCache(authCache, cacheKey, {
 			at: Date.now(),
@@ -1527,7 +1452,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.9.6";
+var version = "0.10.4";
 
 //#endregion
 //#region src/version.ts
@@ -2116,19 +2041,20 @@ function configuredQuery(queries, endpoint) {
 		origin
 	} : null;
 }
-function inferenceApiKey(env, session) {
+function inferenceApiKey(env) {
 	if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
 	try {
 		const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8"));
-		if (typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY) return auth.OPENAI_API_KEY;
-	} catch {}
-	return configuredProviderCredential(session, env);
+		return typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null;
+	} catch {
+		return null;
+	}
 }
-function configuredQueryContext(queries, endpoint, env, session) {
+function configuredQueryContext(queries, endpoint, env) {
 	const query = configuredQuery(queries, endpoint);
 	if (!query || !endpoint) return null;
 	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
-	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env, session) : env[credentialEnv];
+	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env) : env[credentialEnv];
 	const userId = env[query.userIdEnv];
 	if (!accessToken || query.template === "newApi" && !userId) return null;
 	return {
@@ -2205,20 +2131,18 @@ function startConfiguredQuery(context, now) {
 }
 /**
 * Query a matching relay balance endpoint. Dedicated credentials are read
-* only from named environment variables and never persisted. A session is
-* optional and only widens the credential search to config.toml, which is how
-* a provider configured with an inline token is reached.
+* only from named environment variables and never persisted.
 */
-async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now(), session = null) {
-	const context = configuredQueryContext(queries, endpoint, env, session);
+async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
 	if (!context) return null;
 	const cached = queryCache.get(context.cacheKey);
 	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
 	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cachedQueryValue(cached, now);
 	return startConfiguredQuery(context, now);
 }
-function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now(), session = null) {
-	const context = configuredQueryContext(queries, endpoint, env, session);
+function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
 	if (!context) return null;
 	const cached = queryCache.get(context.cacheKey);
 	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
@@ -2331,7 +2255,7 @@ const SNAPSHOT_FILE_NAME = "account-usage.json";
 const MAX_STORED_BODY_LENGTH = 16384;
 const CACHE_MAX_AGE_MS$1 = 30 * 6e4;
 const CACHE_MAX_ENTRIES$1 = 64;
-const cache$2 = /* @__PURE__ */ new Map();
+const cache$3 = /* @__PURE__ */ new Map();
 function record(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -2488,8 +2412,8 @@ function persistRolloutRateLimits(usage, observedAt, endpoint, env = process.env
 	if (!origin) return;
 	writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, "rollout-cache");
 	const cacheKey = `${getCodexHome(env)}:${origin}`;
-	const cached = cache$2.get(cacheKey);
-	if (!cached?.value || observedAt > cached.value.observedAt) cache$2.delete(cacheKey);
+	const cached = cache$3.get(cacheKey);
+	if (!cached?.value || observedAt > cached.value.observedAt) cache$3.delete(cacheKey);
 }
 function eventOrigin(database, processUuid, timestamp) {
 	const result = spawnSync("sqlite3", [
@@ -2532,10 +2456,10 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 	if (expectedOrigin === null) return null;
 	const codexHome = getCodexHome(env);
 	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
-	const cached = cache$2.get(cacheKey);
+	const cached = cache$3.get(cacheKey);
 	if (cached && now - cached.at < CACHE_MS$1) return cloneSnapshot(cached.value);
 	const remember = (value) => {
-		setTimedCache(cache$2, cacheKey, {
+		setTimedCache(cache$3, cacheKey, {
 			at: now,
 			value: cloneSnapshot(value)
 		}, CACHE_MAX_AGE_MS$1, CACHE_MAX_ENTRIES$1);
@@ -2765,6 +2689,9 @@ function policyLabel(value) {
 		if ("granular" in value) return "granular";
 	}
 }
+function lifecycleDate(value, fallback) {
+	return safeDate$1(typeof value === "number" && Math.abs(value) < 1e11 ? value * 1e3 : value, fallback);
+}
 function parseArguments(value) {
 	if (!value) return null;
 	try {
@@ -2773,32 +2700,6 @@ function parseArguments(value) {
 	} catch {
 		return null;
 	}
-}
-function messageText(content, output = false) {
-	if (typeof content === "string") return content.trim();
-	if (!Array.isArray(content)) return "";
-	return content.flatMap((item) => {
-		if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-		const record = item;
-		const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
-		const text = record.text;
-		if (typeof text !== "string") return [];
-		if (output ? type === "output_text" || type === "text" : type === "input_text" || type === "text") return [text];
-		return [];
-	}).join("\n").trim();
-}
-function responseTurnId(payload) {
-	if (typeof payload.turn_id === "string") return payload.turn_id;
-	const metadata = payload.internal_chat_message_metadata_passthrough;
-	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return;
-	const turnId = metadata.turn_id;
-	return typeof turnId === "string" ? turnId : void 0;
-}
-function isUserPrompt(payload) {
-	const metadata = payload.internal_chat_message_metadata_passthrough;
-	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return true;
-	const kinds = metadata.content_item_kinds;
-	return !Array.isArray(kinds) || kinds.some((kind) => typeof kind === "string" && kind.startsWith("user."));
 }
 function redactSensitiveText(value) {
 	return value.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]").replace(/\bsk-[\w-]{8,}/g, "sk-[REDACTED]").replace(/((?:OPENAI_API_KEY|API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER[_-]?TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|secret)(?:\s+|=\s*))(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(^|[\s,{])(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|secret)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gim, "$1$2[REDACTED]").replace(/(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi, "$1[REDACTED]@");
@@ -2935,8 +2836,6 @@ var RolloutParser = class {
 	images = /* @__PURE__ */ new Map();
 	latestTokenUsage = null;
 	captureConversationBodies;
-	conversationMessageIds = /* @__PURE__ */ new Set();
-	compactionIds = /* @__PURE__ */ new Set();
 	constructor(options = {}) {
 		this.captureConversationBodies = options.captureConversationBodies ?? true;
 	}
@@ -2956,8 +2855,6 @@ var RolloutParser = class {
 		this.runningTools.clear();
 		this.images.clear();
 		this.latestTokenUsage = null;
-		this.conversationMessageIds.clear();
-		this.compactionIds.clear();
 	}
 	getState() {
 		this.state.images = Array.from(this.images.values()).filter((image) => imageIsAvailable(image.path));
@@ -2971,8 +2868,6 @@ var RolloutParser = class {
 			this.runningTools.clear();
 			this.images.clear();
 			this.latestTokenUsage = null;
-			this.conversationMessageIds.clear();
-			this.compactionIds.clear();
 		}
 		for (const line of result.lines) this.parseLine(line);
 		return this.getState();
@@ -2990,14 +2885,20 @@ var RolloutParser = class {
 			return;
 		}
 		if (entry.type === "turn_context") {
-			this.onTurnContext(entry.payload);
+			this.onTurnContext(entry.payload, timestamp);
 			return;
 		}
 		if (entry.type === "response_item") {
+			const payload = entry.payload;
+			if (this.state.session && (payload.role === "assistant" || payload.type !== "message")) this.state.session.lastActivityAt = timestamp;
 			this.onResponseItem(entry.payload, timestamp);
 			return;
 		}
-		if (entry.type === "event_msg") this.onEvent(entry.payload, timestamp);
+		if (entry.type === "event_msg") {
+			const payload = entry.payload;
+			if (this.state.session && payload.type !== "user_message") this.state.session.lastActivityAt = timestamp;
+			this.onEvent(entry.payload, timestamp);
+		}
 	}
 	onSessionMeta(payload, timestamp) {
 		const id = payload.session_id ?? payload.id;
@@ -3013,9 +2914,10 @@ var RolloutParser = class {
 			source: payload.thread_source ?? payload.source
 		};
 	}
-	onTurnContext(payload) {
+	onTurnContext(payload, timestamp) {
 		if (!this.state.session) return;
 		this.state.session.turnId = payload.turn_id;
+		this.state.session.modelObservedAt = timestamp;
 		this.state.session.cwd = payload.cwd ?? this.state.session.cwd;
 		this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots;
 		this.state.session.model = payload.model ?? payload.collaboration_mode?.settings?.model ?? this.state.session.model;
@@ -3026,18 +2928,6 @@ var RolloutParser = class {
 		this.state.session.permissionProfile = policyLabel(payload.permission_profile);
 	}
 	onResponseItem(payload, timestamp) {
-		if (payload.type === "message" && payload.role === "user") {
-			if (isUserPrompt(payload)) this.appendUserTurn(messageText(payload.content), timestamp, responseTurnId(payload) ?? this.state.session?.turnId, payload.id);
-			return;
-		}
-		if (payload.type === "message" && payload.role === "assistant") {
-			this.appendAssistantMessage(messageText(payload.content, true), payload.phase, responseTurnId(payload) ?? this.state.session?.turnId);
-			if (this.state.session) {
-				registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
-				this.state.session.lastResponseAt = timestamp;
-			}
-			return;
-		}
 		if ((payload.type === "function_call" || payload.type === "custom_tool_call") && payload.name) {
 			const id = payload.call_id ?? payload.id ?? `${payload.name}-${timestamp.getTime()}`;
 			const tool = {
@@ -3066,50 +2956,14 @@ var RolloutParser = class {
 			const imageSource = imageSourceForTool(running.name);
 			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.output), imageSource, timestamp, payload.call_id);
 			this.runningTools.delete(payload.call_id);
-		}
-	}
-	appendUserTurn(userMessage, timestamp, turnId, messageId) {
-		if (!userMessage && !turnId && !messageId || messageId && this.conversationMessageIds.has(messageId)) return;
-		if (messageId) this.conversationMessageIds.add(messageId);
-		const previous = this.state.conversationTurns.at(-1);
-		if (previous && (turnId && previous.turnId === turnId || previous.userMessage === userMessage && (!previous.turnId || !turnId) && Math.abs(previous.startedAt.getTime() - timestamp.getTime()) <= 5e3)) {
-			previous.turnId = turnId ?? previous.turnId;
 			return;
 		}
-		this.state.conversationTurns.push({
-			id: turnId ?? messageId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
-			turnId,
-			startedAt: timestamp,
-			userMessage: this.captureConversationBodies ? userMessage : "",
-			assistantMessage: ""
-		});
-	}
-	appendAssistantMessage(message, phase, turnId) {
-		if (!this.captureConversationBodies || !message) return;
-		const turn = turnId ? this.state.conversationTurns.findLast((candidate) => candidate.turnId === turnId) : this.state.conversationTurns.at(-1);
-		if (!turn) return;
-		if (turn.assistantMessage === message || turn.assistantMessage.endsWith(`\n\n${message}`)) return;
-		if (phase === "final_answer") {
-			turn.assistantMessage = message;
-			turn.assistantPhase = phase;
-		} else if (turn.assistantPhase !== "final_answer") {
-			turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
-			turn.assistantPhase = phase;
+		if (payload.type === "message" && payload.role === "assistant" && this.state.session) {
+			registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
+			this.state.session.lastResponseAt = timestamp;
 		}
 	}
 	onEvent(payload, timestamp) {
-		if (payload.type === "item_completed" && payload.item && typeof payload.item === "object") {
-			const item = payload.item;
-			const itemType = typeof item.type === "string" ? item.type.toLowerCase() : "";
-			if (itemType === "contextcompaction") {
-				this.recordCompaction(item.id);
-				return;
-			}
-			const content = messageText(item.content, itemType.includes("agent")) || (typeof item.message === "string" ? item.message.trim() : "");
-			if (itemType === "usermessage") this.appendUserTurn(content, timestamp, payload.turn_id, item.id);
-			else if (itemType === "agentmessage") this.appendAssistantMessage(content, item.phase, payload.turn_id);
-			return;
-		}
 		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
 			const invocation = payload.invocation;
 			const server = invocation && typeof invocation === "object" && !Array.isArray(invocation) ? invocation.server : null;
@@ -3117,13 +2971,31 @@ var RolloutParser = class {
 			return;
 		}
 		if (payload.type === "user_message" && typeof payload.message === "string") {
-			this.appendUserTurn(payload.message.trim(), timestamp, payload.turn_id ?? this.state.session?.turnId);
+			const userMessage = payload.message.trim();
+			if (userMessage) {
+				const turnId = payload.turn_id ?? this.state.session?.turnId;
+				this.state.conversationTurns.push({
+					id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+					turnId,
+					startedAt: timestamp,
+					userMessage: this.captureConversationBodies ? userMessage : "",
+					assistantMessage: ""
+				});
+			}
 			return;
 		}
 		if (payload.type === "agent_message" && typeof payload.message === "string") {
 			if (!this.captureConversationBodies) return;
+			const turn = this.state.conversationTurns.at(-1);
 			const message = payload.message.trim();
-			this.appendAssistantMessage(message, payload.phase, payload.turn_id ?? this.state.session?.turnId);
+			if (!turn || !message) return;
+			if (payload.phase === "final_answer") {
+				turn.assistantMessage = message;
+				turn.assistantPhase = payload.phase;
+			} else if (turn.assistantPhase !== "final_answer") {
+				turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
+				turn.assistantPhase = payload.phase;
+			}
 			return;
 		}
 		if (payload.type === "token_count") {
@@ -3143,13 +3015,14 @@ var RolloutParser = class {
 			this.state.goal = normalizeGoal(payload.goal);
 			return;
 		}
-		if (payload.type === "context_compacted" || payload.type === "compacted") {
-			this.recordCompaction();
+		if (payload.type === "context_compacted") {
+			this.state.compactCount += 1;
 			return;
 		}
 		if (!this.state.session) return;
 		if (payload.type === "task_started") {
-			this.state.session.lastTurnStartedAt = safeDate$1(payload.started_at, timestamp);
+			this.state.session.active = true;
+			this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp);
 			if (typeof payload.model_context_window === "number") this.latestTokenUsage = {
 				total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
 				last_token_usage: this.latestTokenUsage?.last_token_usage ?? {},
@@ -3158,7 +3031,9 @@ var RolloutParser = class {
 			return;
 		}
 		if (payload.type === "task_complete" || payload.type === "turn_aborted") {
-			this.state.session.lastTurnCompletedAt = safeDate$1(payload.completed_at, timestamp);
+			this.state.session.active = false;
+			this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp);
+			if (payload.type === "task_complete") this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt;
 			this.state.session.lastTurnDurationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : void 0;
 			this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === "number" ? payload.time_to_first_token_ms : void 0;
 			const outputTokens = this.latestTokenUsage?.last_token_usage?.output_tokens;
@@ -3167,20 +3042,26 @@ var RolloutParser = class {
 			this.state.session.outputTokensPerSecond = outputSpeed !== void 0 && outputSpeed <= 2e3 ? outputSpeed : void 0;
 		}
 	}
-	recordCompaction(id) {
-		if (id && this.compactionIds.has(id)) return;
-		if (id) this.compactionIds.add(id);
-		this.state.compactCount += 1;
-	}
 };
 
 //#endregion
 //#region src/codex/session-finder.ts
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_AGE_MS = 336 * 60 * 60 * 1e3;
+function realPath(value) {
+	try {
+		return fs.realpathSync.native(value);
+	} catch {
+		return path.resolve(value);
+	}
+}
+function normalizedPath$1(value) {
+	const resolved = realPath(value);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 function isWithinProject(candidateCwd, targetCwd) {
-	const candidate = pathIdentity(candidateCwd);
-	const target = pathIdentity(targetCwd);
+	const candidate = normalizedPath$1(candidateCwd);
+	const target = normalizedPath$1(targetCwd);
 	return candidate === target || candidate.startsWith(`${target}${path.sep}`);
 }
 function readFirstLine(filePath) {
@@ -3373,6 +3254,7 @@ const DEFAULT_CONFIG = {
 		showSessionTokens: false,
 		showSessionStartDate: false,
 		showLastResponseAt: false,
+		showLastCompletedAt: true,
 		showCompactions: false,
 		showSessionId: false,
 		mergeGroups: DEFAULT_MERGE_GROUPS.map((group) => [...group]),
@@ -3613,6 +3495,7 @@ function validateConfig(value) {
 			showSessionTokens: booleanValue(rawDisplay.showSessionTokens, fallback.display.showSessionTokens),
 			showSessionStartDate: booleanValue(rawDisplay.showSessionStartDate, fallback.display.showSessionStartDate),
 			showLastResponseAt: booleanValue(rawDisplay.showLastResponseAt, fallback.display.showLastResponseAt),
+			showLastCompletedAt: booleanValue(rawDisplay.showLastCompletedAt, fallback.display.showLastCompletedAt),
 			showCompactions: booleanValue(rawDisplay.showCompactions, fallback.display.showCompactions),
 			showSessionId: booleanValue(rawDisplay.showSessionId, fallback.display.showSessionId),
 			mergeGroups: mergeGroups(rawDisplay.mergeGroups),
@@ -5520,6 +5403,7 @@ function projectPath(value, levels) {
 //#region src/render/i18n.ts
 const MESSAGES = {
 	"en": {
+		runningModel: "running",
 		context: "Context",
 		usage: "Usage",
 		usageCached: "cached",
@@ -5553,6 +5437,8 @@ const MESSAGES = {
 		mode: "Mode",
 		started: "Started",
 		lastResponse: "Last response",
+		lastCompleted: "Completed",
+		lastActive: "Last active",
 		input: "in",
 		cache: "cache",
 		output: "out",
@@ -5560,6 +5446,7 @@ const MESSAGES = {
 		navigate: "click HUD or press F12, then n"
 	},
 	"zh-Hans": {
+		runningModel: "本轮执行",
 		context: "上下文",
 		usage: "额度",
 		usageCached: "缓存",
@@ -5593,6 +5480,8 @@ const MESSAGES = {
 		mode: "模式",
 		started: "开始",
 		lastResponse: "最近响应",
+		lastCompleted: "完成时间",
+		lastActive: "最近活动",
 		input: "输入",
 		cache: "缓存",
 		output: "输出",
@@ -5757,12 +5646,19 @@ function addedDirectories(ctx, prefix) {
 	return roots;
 }
 function modelName(ctx) {
-	const model = ctx.config.display.modelOverride.trim() || ctx.state.session?.model;
+	const override = ctx.config.display.modelOverride.trim();
+	const session = ctx.state.session;
+	const selected = session?.selectedModel;
+	const model = override || selected?.model || session?.model;
 	if (!model || !ctx.config.display.showModel) return null;
 	const compact = ctx.config.display.modelFormat === "full" ? model : model.replace(/^openai\//, "").replace(/-\d+k(?:-context)?$/i, "");
-	const effort = ctx.config.display.showEffortLevel && ctx.state.session?.reasoningEffort ? ` ${ctx.state.session.reasoningEffort}` : "";
+	const reasoningEffort = selected ? selected.reasoningEffort : session?.reasoningEffort;
+	const effort = ctx.config.display.showEffortLevel && reasoningEffort ? ` ${reasoningEffort}` : "";
 	const provider = ctx.config.display.showProvider ? ctx.config.display.providerName || ctx.state.session?.modelProvider : null;
-	return color(`[${safeText(provider ? `${provider} | ${compact}${effort}` : `${compact}${effort}`)}]`, ctx.config.colors.model, ctx.options.color);
+	const running = session?.lastTurnStartedAt && session.lastTurnStartedAt.getTime() > (session.lastTurnCompletedAt?.getTime() ?? 0);
+	const differs = selected && session?.model && (selected.model !== session.model || ctx.config.display.showEffortLevel && selected.reasoningEffort !== session.reasoningEffort);
+	const active = !override && running && differs ? `; ${message(ctx.config.language, "runningModel")}: ${session.model}${ctx.config.display.showEffortLevel && session.reasoningEffort ? ` ${session.reasoningEffort}` : ""}` : "";
+	return color(`[${safeText(provider ? `${provider} | ${compact}${effort}${active}` : `${compact}${effort}${active}`)}]`, ctx.config.colors.model, ctx.options.color);
 }
 function gitSegment(ctx) {
 	if (!ctx.config.gitStatus.enabled || !ctx.state.git?.isGitRepo || !ctx.state.git.branch) return null;
@@ -5894,6 +5790,14 @@ function renderSessionLine(ctx) {
 	const session = ctx.state.session;
 	const parts = [];
 	if (ctx.config.display.showDuration) parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
+	const activityAt = session?.activity?.lastActivityAt ?? session?.lastCompletedAt;
+	if (ctx.config.display.showLastCompletedAt && activityAt) {
+		const date = activityAt;
+		const pad = (value) => String(value).padStart(2, "0");
+		const completed = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+		const label = session?.activity?.active ? "lastActive" : "lastCompleted";
+		parts.push(color(`${message(ctx.config.language, label)}: ${completed}`, "cyan", ctx.options.color));
+	}
 	if (ctx.config.display.showSessionStartDate && session?.startTime) {
 		const locale = ctx.config.language === "en" ? "en" : "zh-CN";
 		parts.push(`${message(ctx.config.language, "started")} ${session.startTime.toLocaleString(locale)}`);
@@ -6212,6 +6116,48 @@ function settleCmuxPaneHeight(currentRows, managedHeight, selfFraction, geometry
 }
 
 //#endregion
+//#region src/codex/session-model.ts
+const cache$2 = /* @__PURE__ */ new Map();
+/** Read the selected settings for this exact thread, independently of its running turn. */
+function readSelectedModel(session, env = process.env, now = Date.now()) {
+	const database = path.join(getCodexHome(env), "state_5.sqlite");
+	if (!/^[\w-]{1,128}$/.test(session.id) || !fs.existsSync(database)) return null;
+	const key = `${database}:${session.id}`;
+	const cached = cache$2.get(key);
+	let value = cached?.value ?? null;
+	if (!cached || now - cached.at >= 1e3) {
+		value = null;
+		try {
+			const result = spawnSync("sqlite3", [
+				"-readonly",
+				"-json",
+				database,
+				`SELECT model, reasoning_effort, updated_at_ms FROM threads WHERE id = '${session.id}' LIMIT 1;`
+			], {
+				encoding: "utf8",
+				timeout: 750,
+				maxBuffer: 64 * 1024,
+				windowsHide: true
+			});
+			if (result.status === 0) {
+				const row = JSON.parse(result.stdout || "[]")[0];
+				if (typeof row?.model === "string" && row.model.trim() && Number.isFinite(row.updated_at_ms)) value = {
+					model: row.model,
+					reasoningEffort: typeof row.reasoning_effort === "string" ? row.reasoning_effort : void 0,
+					updatedAt: row.updated_at_ms
+				};
+			}
+		} catch {}
+		setTimedCache(cache$2, key, {
+			at: now,
+			value
+		}, 6e4, 256);
+	}
+	if (value && value.updatedAt >= (session.modelObservedAt?.getTime() ?? session.startTime.getTime())) return { ...value };
+	return null;
+}
+
+//#endregion
 //#region src/collectors/agents.ts
 const COMPLETED_VISIBLE_MS = 3e4;
 const STARTING_VISIBLE_MS = 15 * 6e4;
@@ -6249,6 +6195,7 @@ function readAgentRollout(candidate) {
 		cached.at = Date.now();
 		return {
 			active: cached.activeTurns.size > 0,
+			hasStarted: cached.hasStarted,
 			model: cached.model,
 			startedAt: new Date(cached.startedAt),
 			lastTimestamp: new Date(cached.lastTimestamp)
@@ -6260,6 +6207,7 @@ function readAgentRollout(candidate) {
 		size: 0,
 		tail: new JsonlTail(),
 		activeTurns: /* @__PURE__ */ new Set(),
+		hasStarted: false,
 		startedAt: candidate.startTime,
 		lastTimestamp: candidate.startTime
 	};
@@ -6267,6 +6215,7 @@ function readAgentRollout(candidate) {
 		const { lines, reset } = cached.tail.read(candidate.path);
 		if (reset) {
 			cached.activeTurns.clear();
+			cached.hasStarted = false;
 			cached.model = void 0;
 			cached.startedAt = candidate.startTime;
 			cached.lastTimestamp = candidate.startTime;
@@ -6288,11 +6237,17 @@ function readAgentRollout(candidate) {
 			}
 			if (entry.type !== "event_msg") continue;
 			if (payload.type === "task_started" && typeof payload.turn_id === "string") {
+				cached.hasStarted = true;
 				cached.activeTurns.add(payload.turn_id);
 				cached.startedAt = safeDate(payload.started_at, cached.lastTimestamp);
-			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
-			else if (payload.type === "turn_aborted") if (typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
-			else cached.activeTurns.clear();
+			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") {
+				cached.hasStarted = true;
+				cached.activeTurns.delete(payload.turn_id);
+			} else if (payload.type === "turn_aborted") {
+				cached.hasStarted = true;
+				if (typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
+				else cached.activeTurns.clear();
+			}
 		}
 	} catch {
 		return null;
@@ -6303,6 +6258,7 @@ function readAgentRollout(candidate) {
 	setTimedCache(rolloutCache, candidate.path, cached, ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const value = {
 		active: cached.activeTurns.size > 0,
+		hasStarted: cached.hasStarted,
 		model: cached.model,
 		startedAt: cached.startedAt,
 		lastTimestamp: cached.lastTimestamp
@@ -6314,11 +6270,12 @@ function parseAgent(candidate, now) {
 	if (!parsed) return null;
 	const active = parsed.active;
 	const ageMs = now.getTime() - candidate.mtimeMs;
-	const starting = !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime();
-	if (!active && !starting && ageMs > COMPLETED_VISIBLE_MS) return null;
+	const starting = !parsed.hasStarted && !active && ageMs < STARTING_VISIBLE_MS && candidate.mtimeMs === candidate.startTime.getTime();
 	return {
 		parentThreadId: candidate.parentThreadId ?? "",
-		active,
+		active: active || starting,
+		visible: active || starting || ageMs <= COMPLETED_VISIBLE_MS,
+		lastActivityAt: parsed.lastTimestamp,
 		entry: {
 			id: candidate.sessionId,
 			type: label(candidate),
@@ -6345,13 +6302,26 @@ function descendants(rootThreadId, runtimes) {
 	}
 	return result;
 }
-function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ new Date()) {
-	if (!session) return [];
+function collectAgentSnapshot(session, env = process.env, now = /* @__PURE__ */ new Date()) {
+	if (!session) return {
+		agents: [],
+		activity: { active: false }
+	};
 	const codexHome = getCodexHome(env);
 	pruneTimedCache(rolloutCache, now.getTime(), ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const key = `${codexHome}:${session.id}`;
-	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS) return structuredClone(cache$1.agents);
-	const runtimes = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId).flatMap((candidate) => {
+	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS) return structuredClone(cache$1.snapshot);
+	const candidates = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId);
+	const ids = /* @__PURE__ */ new Set([session.id]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const candidate of candidates) if (ids.has(candidate.parentThreadId) && !ids.has(candidate.sessionId)) {
+			ids.add(candidate.sessionId);
+			changed = true;
+		}
+	}
+	const runtimes = candidates.filter((candidate) => ids.has(candidate.sessionId)).flatMap((candidate) => {
 		const runtime = parseAgent(candidate, now);
 		return runtime ? [runtime] : [];
 	});
@@ -6370,17 +6340,23 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 			if (child.active || child.entry.status === "starting") activeDescendantCount += 1;
 			queue.push(...childrenByParent.get(child.entry.id) ?? []);
 		}
-		return {
+		return runtime.visible || activeDescendantCount > 0 ? [{
 			...runtime.entry,
 			activeDescendantCount
-		};
-	});
+		}] : [];
+	}).flat();
+	const activity = { active: tree.some((runtime) => runtime.active) };
+	for (const runtime of tree) if (!activity.lastActivityAt || runtime.lastActivityAt > activity.lastActivityAt) activity.lastActivityAt = runtime.lastActivityAt;
+	const snapshot = {
+		agents,
+		activity
+	};
 	cache$1 = {
 		key,
 		at: now.getTime(),
-		agents
+		snapshot
 	};
-	return structuredClone(agents);
+	return structuredClone(snapshot);
 }
 
 //#endregion
@@ -6645,13 +6621,7 @@ function hookCountFromJson(filePath) {
 function collectProjectInfo(cwd, workspaceRoots = [], env = process.env, includeCounts = true, now = Date.now()) {
 	const codexHome = getCodexHome(env);
 	const projectRoot = findGitRoot(cwd) ?? path.resolve(cwd);
-	const rootIdentities = /* @__PURE__ */ new Set();
-	const roots = [projectRoot, ...workspaceRoots.map((root) => path.resolve(root))].filter((root) => {
-		const identity = pathIdentity(root, env);
-		if (rootIdentities.has(identity)) return false;
-		rootIdentities.add(identity);
-		return true;
-	});
+	const roots = Array.from(/* @__PURE__ */ new Set([projectRoot, ...workspaceRoots.map((root) => path.resolve(root))]));
 	const cacheKey = `${codexHome}:${projectRoot}:${includeCounts}:${roots.join("\0")}`;
 	const cached = projectCache.get(cacheKey);
 	if (cached && now - cached.at < PROJECT_CACHE_MS) return structuredClone(cached.value);
@@ -6692,6 +6662,25 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		...rollout.session,
 		sessionName: title ?? rollout.session.sessionName
 	} : null;
+	if (session && config.display.showModel) session.selectedModel = readSelectedModel(session, process.env, now.getTime()) ?? void 0;
+	const agentSnapshot = config.display.showAgents || config.display.showLastCompletedAt ? collectAgentSnapshot(session, process.env, now) : {
+		agents: [],
+		activity: {
+			active: false,
+			lastActivityAt: void 0
+		}
+	};
+	if (session) {
+		const dates = [
+			session.lastActivityAt,
+			session.lastCompletedAt,
+			agentSnapshot.activity.lastActivityAt
+		].filter((date) => Boolean(date));
+		session.activity = {
+			active: Boolean(session.active || agentSnapshot.activity.active),
+			lastActivityAt: dates.length ? new Date(Math.max(...dates.map((date) => date.getTime()))) : void 0
+		};
+	}
 	const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null;
 	return {
 		session,
@@ -6704,7 +6693,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		images: rollout.images,
 		skills: rollout.skills,
 		mcpServers: rollout.mcpServers,
-		agents: config.display.showAgents ? collectAgentEntries(session) : [],
+		agents: config.display.showAgents ? agentSnapshot.agents : [],
 		todos: rollout.todos,
 		goal: rollout.goal,
 		conversationTurns: rollout.conversationTurns,
@@ -6722,9 +6711,18 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 //#region src/runtime/session-binding.ts
 const DISCOVERY_TIMEOUT_MS = 1e4;
 const LOCK_STALE_MS = 3e4;
+function normalizedPath(value) {
+	let resolved;
+	try {
+		resolved = fs.realpathSync.native(value);
+	} catch {
+		resolved = path.resolve(value);
+	}
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 function rootSessions(cwd, codexHome = getCodexHome()) {
-	const normalizedCwd = pathIdentity(cwd);
-	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => pathIdentity(candidate.cwd) === normalizedCwd);
+	const normalizedCwd = normalizedPath(cwd);
+	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => normalizedPath(candidate.cwd) === normalizedCwd);
 }
 function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
 	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
@@ -6737,7 +6735,7 @@ function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModi
 	})[0] ?? null;
 }
 function createSessionBindingPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(pathIdentity(cwd, env)).digest("hex").slice(0, 12);
+	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
 	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
 }
 /**
@@ -6772,7 +6770,7 @@ function readSessionBinding(bindingPath) {
 	}
 }
 function lockPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(pathIdentity(cwd, env)).digest("hex");
+	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
 	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
 }
 function delay(milliseconds, signal) {
@@ -6829,4 +6827,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-CoOZi_9a.mjs.map
+//# sourceMappingURL=session-binding-x3H5CAx4.mjs.map

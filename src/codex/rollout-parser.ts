@@ -90,6 +90,11 @@ function policyLabel(value: unknown): string | undefined {
   return undefined
 }
 
+function lifecycleDate(value: unknown, fallback: Date): Date {
+  // Current Codex uses Unix seconds; older records can carry ISO strings or milliseconds.
+  return safeDate(typeof value === 'number' && Math.abs(value) < 100_000_000_000 ? value * 1000 : value, fallback)
+}
+
 function parseArguments(value: string | undefined): Record<string, unknown> | null {
   if (!value) {
     return null
@@ -103,54 +108,6 @@ function parseArguments(value: string | undefined): Record<string, unknown> | nu
   catch {
     return null
   }
-}
-
-function messageText(content: unknown, output = false): string {
-  if (typeof content === 'string') {
-    return content.trim()
-  }
-  if (!Array.isArray(content)) {
-    return ''
-  }
-  return content
-    .flatMap((item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        return []
-      }
-      const record = item as Record<string, unknown>
-      const type = typeof record.type === 'string' ? record.type.toLowerCase() : ''
-      const text = record.text
-      if (typeof text !== 'string') {
-        return []
-      }
-      if (output ? type === 'output_text' || type === 'text' : type === 'input_text' || type === 'text') {
-        return [text]
-      }
-      return []
-    })
-    .join('\n')
-    .trim()
-}
-
-function responseTurnId(payload: ResponseItemPayload): string | undefined {
-  if (typeof payload.turn_id === 'string') {
-    return payload.turn_id
-  }
-  const metadata = payload.internal_chat_message_metadata_passthrough
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return undefined
-  }
-  const turnId = (metadata as Record<string, unknown>).turn_id
-  return typeof turnId === 'string' ? turnId : undefined
-}
-
-function isUserPrompt(payload: ResponseItemPayload): boolean {
-  const metadata = payload.internal_chat_message_metadata_passthrough
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return true
-  }
-  const kinds = (metadata as Record<string, unknown>).content_item_kinds
-  return !Array.isArray(kinds) || kinds.some(kind => typeof kind === 'string' && kind.startsWith('user.'))
 }
 
 export function redactSensitiveText(value: string): string {
@@ -359,8 +316,6 @@ export class RolloutParser {
   private readonly images = new Map<string, SessionImage>()
   private latestTokenUsage: TokenUsageInfo | null = null
   private captureConversationBodies: boolean
-  private readonly conversationMessageIds = new Set<string>()
-  private readonly compactionIds = new Set<string>()
 
   constructor(options: { captureConversationBodies?: boolean } = {}) {
     this.captureConversationBodies = options.captureConversationBodies ?? true
@@ -388,8 +343,6 @@ export class RolloutParser {
     this.runningTools.clear()
     this.images.clear()
     this.latestTokenUsage = null
-    this.conversationMessageIds.clear()
-    this.compactionIds.clear()
   }
 
   getState(): ParsedRolloutState {
@@ -407,8 +360,6 @@ export class RolloutParser {
       this.runningTools.clear()
       this.images.clear()
       this.latestTokenUsage = null
-      this.conversationMessageIds.clear()
-      this.compactionIds.clear()
     }
     for (const line of result.lines) {
       this.parseLine(line)
@@ -431,14 +382,22 @@ export class RolloutParser {
       return
     }
     if (entry.type === 'turn_context') {
-      this.onTurnContext(entry.payload as TurnContextPayload)
+      this.onTurnContext(entry.payload as TurnContextPayload, timestamp)
       return
     }
     if (entry.type === 'response_item') {
+      const payload = entry.payload as ResponseItemPayload
+      if (this.state.session && (payload.role === 'assistant' || payload.type !== 'message')) {
+        this.state.session.lastActivityAt = timestamp
+      }
       this.onResponseItem(entry.payload as ResponseItemPayload, timestamp)
       return
     }
     if (entry.type === 'event_msg') {
+      const payload = entry.payload as EventMessagePayload
+      if (this.state.session && payload.type !== 'user_message') {
+        this.state.session.lastActivityAt = timestamp
+      }
       this.onEvent(entry.payload as EventMessagePayload, timestamp)
     }
   }
@@ -460,11 +419,12 @@ export class RolloutParser {
     }
   }
 
-  private onTurnContext(payload: TurnContextPayload): void {
+  private onTurnContext(payload: TurnContextPayload, timestamp: Date): void {
     if (!this.state.session) {
       return
     }
     this.state.session.turnId = payload.turn_id
+    this.state.session.modelObservedAt = timestamp
     this.state.session.cwd = payload.cwd ?? this.state.session.cwd
     this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots
     this.state.session.model = payload.model
@@ -481,26 +441,6 @@ export class RolloutParser {
   }
 
   private onResponseItem(payload: ResponseItemPayload, timestamp: Date): void {
-    if (payload.type === 'message' && payload.role === 'user') {
-      if (isUserPrompt(payload)) {
-        this.appendUserTurn(messageText(payload.content), timestamp, responseTurnId(payload) ?? this.state.session?.turnId, payload.id)
-      }
-      return
-    }
-    if (payload.type === 'message' && payload.role === 'assistant') {
-      this.appendAssistantMessage(messageText(payload.content, true), payload.phase, responseTurnId(payload) ?? this.state.session?.turnId)
-      if (this.state.session) {
-        registerImagePaths(
-          this.images,
-          imagePathsFromValue(payload.content),
-          'generated_image',
-          timestamp,
-          payload.id,
-        )
-        this.state.session.lastResponseAt = timestamp
-      }
-      return
-    }
     if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && payload.name) {
       const id = payload.call_id ?? payload.id ?? `${payload.name}-${timestamp.getTime()}`
       const tool: ToolEntry = {
@@ -552,73 +492,22 @@ export class RolloutParser {
         )
       }
       this.runningTools.delete(payload.call_id)
+      return
     }
-  }
 
-  private appendUserTurn(userMessage: string, timestamp: Date, turnId?: string, messageId?: string): void {
-    if ((!userMessage && !turnId && !messageId) || (messageId && this.conversationMessageIds.has(messageId))) {
-      return
-    }
-    if (messageId) {
-      this.conversationMessageIds.add(messageId)
-    }
-    const previous = this.state.conversationTurns.at(-1)
-    if (previous && ((turnId && previous.turnId === turnId)
-      || (previous.userMessage === userMessage && (!previous.turnId || !turnId)
-        && Math.abs(previous.startedAt.getTime() - timestamp.getTime()) <= 5_000))) {
-      previous.turnId = turnId ?? previous.turnId
-      return
-    }
-    this.state.conversationTurns.push({
-      id: turnId ?? messageId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
-      turnId,
-      startedAt: timestamp,
-      userMessage: this.captureConversationBodies ? userMessage : '',
-      assistantMessage: '',
-    })
-  }
-
-  private appendAssistantMessage(message: string, phase?: string, turnId?: string): void {
-    if (!this.captureConversationBodies || !message) {
-      return
-    }
-    const turn = turnId
-      ? this.state.conversationTurns.findLast(candidate => candidate.turnId === turnId)
-      : this.state.conversationTurns.at(-1)
-    if (!turn) {
-      return
-    }
-    if (turn.assistantMessage === message || turn.assistantMessage.endsWith(`\n\n${message}`)) {
-      return
-    }
-    if (phase === 'final_answer') {
-      turn.assistantMessage = message
-      turn.assistantPhase = phase
-    }
-    else if (turn.assistantPhase !== 'final_answer') {
-      turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message
-      turn.assistantPhase = phase
+    if (payload.type === 'message' && payload.role === 'assistant' && this.state.session) {
+      registerImagePaths(
+        this.images,
+        imagePathsFromValue(payload.content),
+        'generated_image',
+        timestamp,
+        payload.id,
+      )
+      this.state.session.lastResponseAt = timestamp
     }
   }
 
   private onEvent(payload: EventMessagePayload, timestamp: Date): void {
-    if (payload.type === 'item_completed' && payload.item && typeof payload.item === 'object') {
-      const item = payload.item
-      const itemType = typeof item.type === 'string' ? item.type.toLowerCase() : ''
-      if (itemType === 'contextcompaction') {
-        this.recordCompaction(item.id)
-        return
-      }
-      const content = messageText(item.content, itemType.includes('agent'))
-        || (typeof item.message === 'string' ? item.message.trim() : '')
-      if (itemType === 'usermessage') {
-        this.appendUserTurn(content, timestamp, payload.turn_id, item.id)
-      }
-      else if (itemType === 'agentmessage') {
-        this.appendAssistantMessage(content, item.phase, payload.turn_id)
-      }
-      return
-    }
     // Codex reports MCP calls as their own event carrying the server name,
     // rather than encoding it in the tool name the way Claude Code does.
     if (payload.type === 'mcp_tool_call_end' || payload.type === 'mcp_tool_call_begin') {
@@ -632,15 +521,38 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'user_message' && typeof payload.message === 'string') {
-      this.appendUserTurn(payload.message.trim(), timestamp, payload.turn_id ?? this.state.session?.turnId)
+      const userMessage = payload.message.trim()
+      if (userMessage) {
+        const turnId = payload.turn_id ?? this.state.session?.turnId
+        this.state.conversationTurns.push({
+          id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+          turnId,
+          startedAt: timestamp,
+          userMessage: this.captureConversationBodies ? userMessage : '',
+          assistantMessage: '',
+        })
+      }
       return
     }
     if (payload.type === 'agent_message' && typeof payload.message === 'string') {
       if (!this.captureConversationBodies) {
         return
       }
+      const turn = this.state.conversationTurns.at(-1)
       const message = payload.message.trim()
-      this.appendAssistantMessage(message, payload.phase, payload.turn_id ?? this.state.session?.turnId)
+      if (!turn || !message) {
+        return
+      }
+      if (payload.phase === 'final_answer') {
+        turn.assistantMessage = message
+        turn.assistantPhase = payload.phase
+      }
+      else if (turn.assistantPhase !== 'final_answer') {
+        turn.assistantMessage = turn.assistantMessage
+          ? `${turn.assistantMessage}\n\n${message}`
+          : message
+        turn.assistantPhase = payload.phase
+      }
       return
     }
     if (payload.type === 'token_count') {
@@ -668,15 +580,16 @@ export class RolloutParser {
       this.state.goal = normalizeGoal(payload.goal)
       return
     }
-    if (payload.type === 'context_compacted' || payload.type === 'compacted') {
-      this.recordCompaction()
+    if (payload.type === 'context_compacted') {
+      this.state.compactCount += 1
       return
     }
     if (!this.state.session) {
       return
     }
     if (payload.type === 'task_started') {
-      this.state.session.lastTurnStartedAt = safeDate(payload.started_at, timestamp)
+      this.state.session.active = true
+      this.state.session.lastTurnStartedAt = lifecycleDate(payload.started_at, timestamp)
       if (typeof payload.model_context_window === 'number') {
         this.latestTokenUsage = {
           total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
@@ -687,7 +600,11 @@ export class RolloutParser {
       return
     }
     if (payload.type === 'task_complete' || payload.type === 'turn_aborted') {
-      this.state.session.lastTurnCompletedAt = safeDate(payload.completed_at, timestamp)
+      this.state.session.active = false
+      this.state.session.lastTurnCompletedAt = lifecycleDate(payload.completed_at, timestamp)
+      if (payload.type === 'task_complete') {
+        this.state.session.lastCompletedAt = this.state.session.lastTurnCompletedAt
+      }
       this.state.session.lastTurnDurationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined
       this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === 'number'
         ? payload.time_to_first_token_ms
@@ -701,15 +618,5 @@ export class RolloutParser {
         ? outputSpeed
         : undefined
     }
-  }
-
-  private recordCompaction(id?: string): void {
-    if (id && this.compactionIds.has(id)) {
-      return
-    }
-    if (id) {
-      this.compactionIds.add(id)
-    }
-    this.state.compactCount += 1
   }
 }

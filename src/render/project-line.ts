@@ -22,20 +22,30 @@ function addedDirectories(ctx: RenderContext, prefix: boolean): string[] {
 
 function modelName(ctx: RenderContext): string | null {
   const override = ctx.config.display.modelOverride.trim()
-  const model = override || ctx.state.session?.model
+  const session = ctx.state.session
+  const selected = session?.selectedModel
+  const model = override || selected?.model || session?.model
   if (!model || !ctx.config.display.showModel) {
     return null
   }
   const compact = ctx.config.display.modelFormat === 'full'
     ? model
     : model.replace(/^openai\//, '').replace(/-\d+k(?:-context)?$/i, '')
-  const effort = ctx.config.display.showEffortLevel && ctx.state.session?.reasoningEffort
-    ? ` ${ctx.state.session.reasoningEffort}`
+  const reasoningEffort = selected ? selected.reasoningEffort : session?.reasoningEffort
+  const effort = ctx.config.display.showEffortLevel && reasoningEffort
+    ? ` ${reasoningEffort}`
     : ''
   const provider = ctx.config.display.showProvider
     ? ctx.config.display.providerName || ctx.state.session?.modelProvider
     : null
-  const text = provider ? `${provider} | ${compact}${effort}` : `${compact}${effort}`
+  const running = session?.lastTurnStartedAt
+    && session.lastTurnStartedAt.getTime() > (session.lastTurnCompletedAt?.getTime() ?? 0)
+  const differs = selected && session?.model && (selected.model !== session.model
+    || (ctx.config.display.showEffortLevel && selected.reasoningEffort !== session.reasoningEffort))
+  const active = !override && running && differs
+    ? `; ${message(ctx.config.language, 'runningModel')}: ${session.model}${ctx.config.display.showEffortLevel && session.reasoningEffort ? ` ${session.reasoningEffort}` : ''}`
+    : ''
+  const text = provider ? `${provider} | ${compact}${effort}${active}` : `${compact}${effort}${active}`
   return color(`[${safeText(text)}]`, ctx.config.colors.model, ctx.options.color)
 }
 

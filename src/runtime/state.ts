@@ -1,5 +1,5 @@
-// @env node
 import type { AccountUsageStatus } from '../codex/account-usage.js'
+// @env node
 import type { ParsedRolloutState } from '../codex/rollout-parser.js'
 import type { CodexProcess } from '../collectors/session-metadata.js'
 import type { HudConfig } from '../types/config.js'
@@ -8,8 +8,9 @@ import process from 'node:process'
 import { selectAccountUsage } from '../codex/account-usage.js'
 import { resolveUsageData } from '../codex/external-usage.js'
 import { evaluateUsageTrust } from '../codex/rate-limits.js'
+import { readSelectedModel } from '../codex/session-model.js'
 import {
-  collectAgentEntries,
+  collectAgentSnapshot,
   collectAuthInfo,
   collectGitStatus,
   collectMemoryInfo,
@@ -44,6 +45,20 @@ export function buildHudState(
   const session = rollout.session
     ? { ...rollout.session, sessionName: title ?? rollout.session.sessionName }
     : null
+  if (session && config.display.showModel) {
+    session.selectedModel = readSelectedModel(session, process.env, now.getTime()) ?? undefined
+  }
+  const agentSnapshot = config.display.showAgents || config.display.showLastCompletedAt
+    ? collectAgentSnapshot(session, process.env, now)
+    : { agents: [], activity: { active: false, lastActivityAt: undefined } }
+  if (session) {
+    const dates = [session.lastActivityAt, session.lastCompletedAt, agentSnapshot.activity.lastActivityAt]
+      .filter((date): date is Date => Boolean(date))
+    session.activity = {
+      active: Boolean(session.active || agentSnapshot.activity.active),
+      lastActivityAt: dates.length ? new Date(Math.max(...dates.map(date => date.getTime()))) : undefined,
+    }
+  }
   const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null
   return {
     session,
@@ -56,7 +71,7 @@ export function buildHudState(
     images: rollout.images,
     skills: rollout.skills,
     mcpServers: rollout.mcpServers,
-    agents: config.display.showAgents ? collectAgentEntries(session) : [],
+    agents: config.display.showAgents ? agentSnapshot.agents : [],
     todos: rollout.todos,
     goal: rollout.goal,
     conversationTurns: rollout.conversationTurns,

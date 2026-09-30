@@ -58,6 +58,52 @@ describe('jSONL tailing', () => {
 })
 
 describe('rollout parser', () => {
+  it.each([1788647387, 1788647387000, '2026-09-05T22:29:47Z'])('accepts lifecycle timestamps in seconds, milliseconds or ISO format: %s', (value) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hud-lifecycle-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    const entries = [
+      { type: 'session_meta', payload: { id: 'lifecycle-test' } },
+      { type: 'event_msg', payload: { type: 'task_started', started_at: value } },
+      { type: 'event_msg', payload: { type: 'task_complete', completed_at: value } },
+    ]
+    fs.writeFileSync(filePath, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`)
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const date = new Date('2026-09-05T22:29:47Z')
+    expect(parser.parse().session).toMatchObject({ lastTurnStartedAt: date, lastTurnCompletedAt: date, lastCompletedAt: date })
+  })
+
+  it('retains the last normal completion across new turns, replies, aborts and parser restarts', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hud-completion-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    const append = (type: string, payload: object, timestamp = '2026-09-05T18:35:00Z') => {
+      fs.appendFileSync(filePath, `${JSON.stringify({ type, payload, timestamp })}\n`)
+    }
+    append('session_meta', { id: 'completion-test', cwd: directory })
+    append('event_msg', { type: 'task_started' })
+    append('response_item', { type: 'message', role: 'assistant', content: [] })
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().session?.lastCompletedAt).toBeUndefined()
+    expect(parser.parse().session?.active).toBe(true)
+    expect(parser.parse().session?.lastActivityAt).toEqual(new Date('2026-09-05T18:35:00Z'))
+    append('event_msg', { type: 'task_complete', completed_at: '2026-09-05T18:34:00Z' })
+    const completed = new Date('2026-09-05T18:34:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(completed)
+    expect(parser.parse().session?.active).toBe(false)
+    append('event_msg', { type: 'task_started' }, '2026-09-06T00:00:00Z')
+    append('response_item', { type: 'message', role: 'assistant', content: [] }, '2026-09-06T00:01:00Z')
+    append('event_msg', { type: 'turn_aborted' }, '2026-09-06T00:02:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(completed)
+    const restarted = new RolloutParser()
+    restarted.setFile(filePath)
+    expect(restarted.parse().session?.lastCompletedAt).toEqual(completed)
+    append('event_msg', { type: 'task_complete' }, '2026-09-06T00:03:00Z')
+    expect(parser.parse().session?.lastCompletedAt).toEqual(new Date('2026-09-06T00:03:00Z'))
+  })
+
   it('parses representative legacy and current Codex rollout contracts', () => {
     const legacy = new RolloutParser()
     legacy.setFile(fixturePath)
@@ -168,231 +214,6 @@ describe('rollout parser', () => {
       userMessage: 'Build a conversation navigator.',
       assistantMessage: 'The conversation navigator is ready.',
     })
-  })
-
-  it('parses current response items and completed items without double-counting turns', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-current-messages-'))
-    temporaryDirectories.push(directory)
-    const filePath = path.join(directory, 'rollout.jsonl')
-    fs.writeFileSync(filePath, [
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:00Z',
-        type: 'session_meta',
-        payload: { session_id: 'current-message-session', cwd: directory },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:01Z',
-        type: 'turn_context',
-        payload: { turn_id: 'turn-current' },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:02Z',
-        type: 'response_item',
-        payload: {
-          type: 'message',
-          id: 'message-user',
-          role: 'user',
-          content: [{ type: 'input_text', text: 'Show the conversation navigator.' }],
-          internal_chat_message_metadata_passthrough: { turn_id: 'turn-current', content_item_kinds: ['user.text'] },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:03Z',
-        type: 'response_item',
-        payload: {
-          type: 'message',
-          id: 'message-assistant',
-          role: 'assistant',
-          phase: 'final_answer',
-          content: [{ type: 'output_text', text: 'The navigator is ready.' }],
-          internal_chat_message_metadata_passthrough: { turn_id: 'turn-current' },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:04Z',
-        type: 'event_msg',
-        payload: {
-          type: 'item_completed',
-          turn_id: 'turn-current',
-          item: {
-            type: 'UserMessage',
-            id: 'completed-user',
-            content: [{ type: 'text', text: 'Show the conversation navigator.' }],
-          },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T01:00:05Z',
-        type: 'event_msg',
-        payload: {
-          type: 'item_completed',
-          turn_id: 'turn-current',
-          item: {
-            type: 'AgentMessage',
-            id: 'completed-assistant',
-            phase: 'final_answer',
-            content: [{ type: 'Text', text: 'The navigator is ready.' }],
-          },
-        },
-      }),
-      '',
-    ].join('\n'), 'utf8')
-
-    const parser = new RolloutParser()
-    parser.setFile(filePath)
-    expect(parser.parse().conversationTurns).toEqual([{
-      id: 'turn-current',
-      turnId: 'turn-current',
-      startedAt: new Date('2026-09-08T01:00:02Z'),
-      userMessage: 'Show the conversation navigator.',
-      assistantMessage: 'The navigator is ready.',
-      assistantPhase: 'final_answer',
-    }])
-  })
-
-  it('accepts case-insensitive completed text and image-only user inputs', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-multimodal-'))
-    temporaryDirectories.push(directory)
-    const filePath = path.join(directory, 'rollout.jsonl')
-    fs.writeFileSync(filePath, [
-      JSON.stringify({
-        timestamp: '2026-09-08T02:00:00Z',
-        type: 'session_meta',
-        payload: { session_id: 'multimodal-session', cwd: directory },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T02:00:01Z',
-        type: 'response_item',
-        payload: {
-          type: 'message',
-          id: 'image-user',
-          role: 'user',
-          content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc' }],
-          internal_chat_message_metadata_passthrough: {
-            turn_id: 'turn-image',
-            content_item_kinds: ['user.image'],
-          },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T02:00:02Z',
-        type: 'event_msg',
-        payload: {
-          type: 'item_completed',
-          turn_id: 'turn-image',
-          item: {
-            type: 'AgentMessage',
-            content: [{ type: 'TEXT', text: 'I can inspect that image.' }],
-          },
-        },
-      }),
-      '',
-    ].join('\n'), 'utf8')
-
-    const parser = new RolloutParser()
-    parser.setFile(filePath)
-    expect(parser.parse().conversationTurns).toEqual([{
-      id: 'turn-image',
-      turnId: 'turn-image',
-      startedAt: new Date('2026-09-08T02:00:01Z'),
-      userMessage: '',
-      assistantMessage: 'I can inspect that image.',
-    }])
-  })
-
-  it('falls back to the response turn id and active turn context', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-turn-id-'))
-    temporaryDirectories.push(directory)
-    const filePath = path.join(directory, 'rollout.jsonl')
-    fs.writeFileSync(filePath, [
-      JSON.stringify({
-        timestamp: '2026-09-08T03:00:00Z',
-        type: 'session_meta',
-        payload: { session_id: 'turn-id-session', cwd: directory },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T03:00:01Z',
-        type: 'turn_context',
-        payload: { turn_id: 'context-turn' },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T03:00:02Z',
-        type: 'response_item',
-        payload: {
-          type: 'message',
-          id: 'top-level-turn-user',
-          role: 'user',
-          turn_id: 'top-level-turn',
-          content: [{ type: 'input_text', text: 'Use the response turn id.' }],
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T03:00:03Z',
-        type: 'response_item',
-        payload: {
-          type: 'message',
-          id: 'context-turn-user',
-          role: 'user',
-          content: [{ type: 'input_text', text: 'Use the active turn context.' }],
-        },
-      }),
-      '',
-    ].join('\n'), 'utf8')
-
-    const parser = new RolloutParser()
-    parser.setFile(filePath)
-    expect(parser.parse().conversationTurns.map(turn => ({
-      id: turn.id,
-      turnId: turn.turnId,
-      userMessage: turn.userMessage,
-    }))).toEqual([
-      { id: 'top-level-turn', turnId: 'top-level-turn', userMessage: 'Use the response turn id.' },
-      { id: 'context-turn', turnId: 'context-turn', userMessage: 'Use the active turn context.' },
-    ])
-  })
-
-  it('counts current ContextCompaction items and legacy compacted events', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-compaction-'))
-    temporaryDirectories.push(directory)
-    const filePath = path.join(directory, 'rollout.jsonl')
-    fs.writeFileSync(filePath, [
-      JSON.stringify({
-        timestamp: '2026-09-08T04:00:00Z',
-        type: 'session_meta',
-        payload: { session_id: 'compaction-session', cwd: directory },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T04:00:01Z',
-        type: 'event_msg',
-        payload: {
-          type: 'item_completed',
-          item: { type: 'ContextCompaction', id: 'compaction-1' },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T04:00:02Z',
-        type: 'event_msg',
-        payload: {
-          type: 'item_completed',
-          item: { type: 'ContextCompaction', id: 'compaction-1' },
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T04:00:03Z',
-        type: 'event_msg',
-        payload: { type: 'compacted' },
-      }),
-      JSON.stringify({
-        timestamp: '2026-09-08T04:00:04Z',
-        type: 'event_msg',
-        payload: { type: 'context_compacted' },
-      }),
-      '',
-    ].join('\n'), 'utf8')
-
-    const parser = new RolloutParser()
-    parser.setFile(filePath)
-    expect(parser.parse().compactCount).toBe(3)
   })
 
   it('preserves complete rate-limit windows across sparse token updates', () => {

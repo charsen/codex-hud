@@ -129,6 +129,7 @@ export interface DisplayConfig {
   showSessionTokens: boolean
   showSessionStartDate: boolean
   showLastResponseAt: boolean
+  showLastCompletedAt: boolean
   showCompactions: boolean
   showSessionId: boolean
   mergeGroups: HudElement[][]
@@ -248,6 +249,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showSessionTokens: false,
     showSessionStartDate: false,
     showLastResponseAt: false,
+    showLastCompletedAt: true,
     showCompactions: false,
     showSessionId: false,
     mergeGroups: DEFAULT_MERGE_GROUPS.map(group => [...group]),

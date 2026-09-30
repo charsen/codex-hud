@@ -4,7 +4,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
-import { isCaseInsensitivePath, pathIdentity } from '../runtime/path-identity.js'
 import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
 
 /**
@@ -290,7 +289,7 @@ export function resolveProcessSession(
   if (!Number.isInteger(codexPid) || codexPid <= 0) {
     return null
   }
-  const cacheKey = `${getCodexHome(env)}:${codexPid}:${pathIdentity(cwd, env)}`
+  const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`
   const cached = processSessionCache.get(cacheKey)
   if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) {
     return cached.value ? { ...cached.value } : null
@@ -320,13 +319,11 @@ export function resolveProcessSession(
   }
   const candidates = ids.map(id => `'${shellSql(id.trim())}'`).join(',')
   const stateDatabase = path.join(getCodexHome(env), 'state_5.sqlite')
-  const resolvedCwd = path.resolve(cwd)
-  const cwdColumn = isCaseInsensitivePath(resolvedCwd, env) ? 'cwd COLLATE NOCASE' : 'cwd'
   const rows = query(stateDatabase, [
     'SELECT id || \'|\' || rollout_path',
     '  FROM threads',
     ` WHERE id IN (${candidates})`,
-    `   AND ${cwdColumn} = '${shellSql(resolvedCwd)}'`,
+    `   AND cwd = '${shellSql(path.resolve(cwd))}'`,
     '   AND (thread_source = \'user\' OR thread_source IS NULL)',
     '   AND (agent_path IS NULL OR agent_path = \'\')',
     ' ORDER BY created_at_ms ASC, id ASC',

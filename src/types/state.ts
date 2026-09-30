@@ -144,6 +144,8 @@ export interface SessionInfo {
   cliVersion?: string
   model?: string
   reasoningEffort?: string
+  modelObservedAt?: Date
+  selectedModel?: { model: string, reasoningEffort?: string }
   modelProvider?: string
   source?: SessionSource
   turnId?: string
@@ -155,6 +157,10 @@ export interface SessionInfo {
   lastResponseAt?: Date
   lastTurnStartedAt?: Date
   lastTurnCompletedAt?: Date
+  lastCompletedAt?: Date
+  lastActivityAt?: Date
+  active?: boolean
+  activity?: { active: boolean, lastActivityAt?: Date }
   lastTurnDurationMs?: number
   timeToFirstTokenMs?: number
   outputTokensPerSecond?: number

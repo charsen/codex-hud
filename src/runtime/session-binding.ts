@@ -5,16 +5,26 @@ import path from 'node:path'
 import process from 'node:process'
 import { isSubagentSource, listSessionCandidates } from '../codex/session-finder.js'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
-import { pathIdentity } from './path-identity.js'
 
 const DISCOVERY_TIMEOUT_MS = 10_000
 const LOCK_STALE_MS = 30_000
 
+function normalizedPath(value: string): string {
+  let resolved: string
+  try {
+    resolved = fs.realpathSync.native(value)
+  }
+  catch {
+    resolved = path.resolve(value)
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
 function rootSessions(cwd: string, codexHome = getCodexHome()) {
-  const normalizedCwd = pathIdentity(cwd)
+  const normalizedCwd = normalizedPath(cwd)
   return listSessionCandidates(codexHome)
     .filter(candidate => !isSubagentSource(candidate.source))
-    .filter(candidate => pathIdentity(candidate.cwd) === normalizedCwd)
+    .filter(candidate => normalizedPath(candidate.cwd) === normalizedCwd)
 }
 
 export type SessionSnapshot = ReadonlyMap<string, number>
@@ -52,7 +62,7 @@ export function findNewRootSession(
 }
 
 export function createSessionBindingPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
-  const digest = createHash('sha1').update(pathIdentity(cwd, env)).digest('hex').slice(0, 12)
+  const digest = createHash('sha1').update(normalizedPath(cwd)).digest('hex').slice(0, 12)
   return path.join(getHudStateDirectory(env), 'bindings', `${digest}-${randomUUID()}.json`)
 }
 
@@ -89,7 +99,7 @@ export function readSessionBinding(bindingPath: string): SessionBinding {
 }
 
 function lockPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
-  const digest = createHash('sha1').update(pathIdentity(cwd, env)).digest('hex')
+  const digest = createHash('sha1').update(normalizedPath(cwd)).digest('hex')
   return path.join(getHudStateDirectory(env), 'bindings', 'locks', digest)
 }
 

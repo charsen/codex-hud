@@ -4,8 +4,80 @@ import { createPreset } from '../config/presets.js'
 import { HUD_VERSION } from '../version.js'
 import { visibleWidth } from './format.js'
 import { renderHud } from './index.js'
+import { renderProjectLine } from './project-line.js'
+import { renderSessionLine } from './session-line.js'
 
 const now = new Date('2026-07-16T09:00:00Z')
+
+describe('last completion time', () => {
+  it('shows activity while any agent runs and completion as soon as all are idle', () => {
+    const value = state()
+    value.session!.activity = { active: true, lastActivityAt: new Date(2026, 8, 6, 2, 35) }
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderSessionLine(ctx)).toContain('Last active: 09-06 02:35')
+    ctx.config.language = 'zh-Hans'
+    expect(renderSessionLine(ctx)).toContain('最近活动: 09-06 02:35')
+    value.session!.activity.active = false
+    expect(renderSessionLine(ctx)).toContain('完成时间: 09-06 02:35')
+    ctx.config.language = 'en'
+    expect(renderSessionLine(ctx)).toContain('Completed: 09-06 02:35')
+  })
+
+  it('shows a persistent local calendar time and supports hiding the metric', () => {
+    const value = state()
+    value.session!.lastCompletedAt = new Date(2026, 8, 6, 2, 35)
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderSessionLine(ctx)).toContain('Completed: 09-06 02:35')
+    expect(renderSessionLine(ctx)).not.toContain('2026-')
+    ctx.now = new Date(2026, 8, 7, 10, 0)
+    ctx.config.language = 'zh-Hans'
+    expect(renderSessionLine(ctx)).toContain('完成时间: 09-06 02:35')
+    ctx.options.color = true
+    expect(renderSessionLine(ctx)).toContain('\u001B[36m完成时间: 09-06 02:35\u001B[0m')
+    ctx.config.display.showLastCompletedAt = false
+    expect(renderSessionLine(ctx)).not.toContain('完成时间')
+    ctx.config.display.showLastCompletedAt = true
+    value.session!.lastCompletedAt = undefined
+    expect(renderSessionLine(ctx)).not.toContain('完成时间')
+  })
+})
+
+describe('model selection during a turn', () => {
+  it('shows selected settings and the still-running model, then clears the distinction on the next turn', () => {
+    const value = state()
+    const session = value.session!
+    session.model = 'gpt-5.6-sol'
+    session.reasoningEffort = 'xhigh'
+    session.selectedModel = { model: 'gpt-6-astra', reasoningEffort: 'high' }
+    session.lastTurnStartedAt = now
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderProjectLine(ctx)).toContain('[gpt-6-astra high; running: gpt-5.6-sol xhigh]')
+    ctx.config.language = 'zh-Hans'
+    expect(renderProjectLine(ctx)).toContain('本轮执行: gpt-5.6-sol xhigh')
+    session.model = 'gpt-6-astra'
+    session.reasoningEffort = 'high'
+    expect(renderProjectLine(ctx)).toContain('[gpt-6-astra high]')
+    expect(renderProjectLine(ctx)).not.toContain('本轮执行')
+  })
+
+  it('respects overrides, hidden effort and completion', () => {
+    const value = state()
+    const session = value.session!
+    session.selectedModel = { model: session.model!, reasoningEffort: 'low' }
+    session.lastTurnStartedAt = now
+    const ctx = { config: createPreset('full'), state: value, options: { width: 300, height: 20, color: false }, now }
+    expect(renderProjectLine(ctx)).toContain('running: gpt-5.5 high')
+    ctx.config.display.showEffortLevel = false
+    expect(renderProjectLine(ctx)).not.toContain('running:')
+    ctx.config.display.modelOverride = 'custom label'
+    expect(renderProjectLine(ctx)).toContain('[custom label]')
+    ctx.config.display.modelOverride = ''
+    ctx.config.display.showEffortLevel = true
+    session.lastTurnCompletedAt = now
+    expect(renderProjectLine(ctx)).toContain('[gpt-5.5 low]')
+    expect(renderProjectLine(ctx)).not.toContain('running:')
+  })
+})
 const resetDateTimeOptions: Intl.DateTimeFormatOptions = {
   month: 'short',
   day: 'numeric',

@@ -299,6 +299,7 @@ export function validateConfig(value: unknown): HudConfig {
       showSessionTokens: booleanValue(rawDisplay.showSessionTokens, fallback.display.showSessionTokens),
       showSessionStartDate: booleanValue(rawDisplay.showSessionStartDate, fallback.display.showSessionStartDate),
       showLastResponseAt: booleanValue(rawDisplay.showLastResponseAt, fallback.display.showLastResponseAt),
+      showLastCompletedAt: booleanValue(rawDisplay.showLastCompletedAt, fallback.display.showLastCompletedAt),
       showCompactions: booleanValue(rawDisplay.showCompactions, fallback.display.showCompactions),
       showSessionId: booleanValue(rawDisplay.showSessionId, fallback.display.showSessionId),
       mergeGroups: mergeGroups(rawDisplay.mergeGroups),

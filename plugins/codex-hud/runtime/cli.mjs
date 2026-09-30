@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-CoOZi_9a.mjs";
+import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-x3H5CAx4.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1157,6 +1157,13 @@ const GUIDED_ELEMENTS = [
 		set: (config, value) => config.display.showDuration = value
 	},
 	{
+		name: "lastCompleted",
+		category: "Session",
+		label: "Task activity / completion time",
+		get: (config) => config.display.showLastCompletedAt,
+		set: (config, value) => config.display.showLastCompletedAt = value
+	},
+	{
 		name: "speed",
 		category: "Session",
 		label: "Output speed",
@@ -1403,6 +1410,7 @@ const CONFIGURE_MESSAGES = {
 			auth: "Authentication method",
 			memory: "Approximate system memory",
 			duration: "Session duration",
+			lastCompleted: "Task activity / completion time",
 			speed: "Output speed",
 			sessionName: "Session title",
 			sessionTokens: "Session token totals",
@@ -1465,6 +1473,7 @@ const CONFIGURE_MESSAGES = {
 			auth: "认证方式",
 			memory: "系统内存估计",
 			duration: "会话时长",
+			lastCompleted: "任务活动 / 完成时间",
 			speed: "输出速度",
 			sessionName: "会话标题",
 			sessionTokens: "会话 Token 汇总",
