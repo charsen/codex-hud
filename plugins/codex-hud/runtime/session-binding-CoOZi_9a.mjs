@@ -6729,8 +6729,8 @@ function rootSessions(cwd, codexHome = getCodexHome()) {
 function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
 	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
 }
-function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false) {
-	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).sort((left, right) => {
+function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false, startWindow) {
+	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).filter((candidate) => !startWindow || candidate.startTime.getTime() >= startWindow.after && candidate.startTime.getTime() < startWindow.before).sort((left, right) => {
 		const leftIsNew = !snapshot.has(left.path);
 		if (leftIsNew !== !snapshot.has(right.path)) return leftIsNew ? -1 : 1;
 		return left.startTime.getTime() - right.startTime.getTime();
@@ -6816,17 +6816,17 @@ async function acquireSessionDiscoveryLock(cwd, env = process.env) {
 		await delay(25);
 	}
 }
-async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false) {
+async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow) {
 	const deadline = Date.now() + timeoutMs;
 	do {
 		if (signal?.aborted) return null;
-		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified);
+		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow);
 		if (session) return session.path;
-		await delay(25, signal);
+		await delay(startWindow ? 250 : 25, signal);
 	} while (Date.now() < deadline);
 	return null;
 }
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-l843UJML.mjs.map
+//# sourceMappingURL=session-binding-CoOZi_9a.mjs.map

@@ -310,6 +310,7 @@ export async function runCodexChild(
   const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null
   const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null
   const allowModifiedSession = isResumeInvocation(args)
+  const childStartedAt = Date.now()
   const child = spawn(codex, args, { cwd, stdio: 'inherit', env })
   if (bindingPath && child.pid) {
     // Codex only writes a rollout once the user sends a message, so publish the
@@ -328,8 +329,10 @@ export async function runCodexChild(
     child.once('exit', code => finish(code ?? 1))
   })
   if (bindingPath && snapshot && release) {
+    let rolloutPath: string | null = null
+    let discoveryEndedAt = childStartedAt
     try {
-      let rolloutPath = await waitForNewRootSession(
+      rolloutPath = await waitForNewRootSession(
         cwd,
         snapshot,
         codexHome,
@@ -338,6 +341,7 @@ export async function runCodexChild(
         10_000,
         discoveryController.signal,
         allowModifiedSession,
+        allowModifiedSession ? undefined : { after: childStartedAt, before: Number.POSITIVE_INFINITY },
       )
       if (!rolloutPath && childExited) {
         rolloutPath = await waitForNewRootSession(
@@ -347,6 +351,7 @@ export async function runCodexChild(
           250,
           undefined,
           allowModifiedSession,
+          allowModifiedSession ? undefined : { after: childStartedAt, before: Number.POSITIVE_INFINITY },
         )
       }
       if (rolloutPath) {
@@ -354,7 +359,28 @@ export async function runCodexChild(
       }
     }
     finally {
+      discoveryEndedAt = Date.now()
       release()
+    }
+    // The shared server can defer the rollout until the first user message.
+    // Keep watching without blocking another launch. Only accept threads started
+    // while we held the discovery lock, so a later launch cannot be borrowed.
+    while (!rolloutPath) {
+      if (childExited || allowModifiedSession) {
+        break
+      }
+      rolloutPath = await waitForNewRootSession(
+        cwd,
+        snapshot,
+        codexHome,
+        1_000,
+        discoveryController.signal,
+        false,
+        { after: childStartedAt, before: discoveryEndedAt },
+      )
+      if (rolloutPath) {
+        writeSessionBinding(bindingPath, rolloutPath, child.pid)
+      }
     }
   }
   const exitCode = await exitCodePromise

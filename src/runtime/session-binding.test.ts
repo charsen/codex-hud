@@ -111,6 +111,23 @@ describe('managed session binding', () => {
     expect(readSessionBinding(bindingPath)).toEqual({ rolloutPath, codexPid: null })
   })
 
+  it('uses thread start time to isolate delayed rollouts from adjacent launches', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-window-'))
+    directories.push(codexHome)
+    const cwd = path.join(codexHome, 'project')
+    fs.mkdirSync(cwd)
+    const snapshot = snapshotRootSessions(cwd, codexHome)
+    writeSession(codexHome, 'earlier-launch', cwd, '2026-07-17T01:00:00Z')
+    writeSession(codexHome, 'later-launch', cwd, '2026-07-17T01:00:20Z')
+    const window = {
+      after: Date.parse('2026-07-17T01:00:10Z'),
+      before: Date.parse('2026-07-17T01:00:20Z'),
+    }
+    expect(findNewRootSession(cwd, snapshot, codexHome, false, window)).toBeNull()
+    const owned = writeSession(codexHome, 'owned-delayed', cwd, '2026-07-17T01:00:10Z')
+    expect(findNewRootSession(cwd, snapshot, codexHome, false, window)?.path).toBe(owned)
+  })
+
   it('publishes the Codex process before a rollout exists', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-pid-'))
     directories.push(directory)

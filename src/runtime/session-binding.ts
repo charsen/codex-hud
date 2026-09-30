@@ -19,6 +19,11 @@ function rootSessions(cwd: string, codexHome = getCodexHome()) {
 
 export type SessionSnapshot = ReadonlyMap<string, number>
 
+export interface SessionStartWindow {
+  after: number
+  before: number
+}
+
 export function snapshotRootSessions(cwd: string, codexHome = getCodexHome()): Map<string, number> {
   return new Map(rootSessions(cwd, codexHome).map(candidate => [candidate.path, candidate.mtimeMs]))
 }
@@ -28,10 +33,14 @@ export function findNewRootSession(
   snapshot: SessionSnapshot,
   codexHome = getCodexHome(),
   allowModified = false,
+  startWindow?: SessionStartWindow,
 ) {
   return rootSessions(cwd, codexHome)
     .filter(candidate => !snapshot.has(candidate.path)
       || (allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)))
+    .filter(candidate => !startWindow
+      || (candidate.startTime.getTime() >= startWindow.after
+        && candidate.startTime.getTime() < startWindow.before))
     .sort((left, right) => {
       const leftIsNew = !snapshot.has(left.path)
       const rightIsNew = !snapshot.has(right.path)
@@ -136,17 +145,18 @@ export async function waitForNewRootSession(
   timeoutMs = DISCOVERY_TIMEOUT_MS,
   signal?: AbortSignal,
   allowModified = false,
+  startWindow?: SessionStartWindow,
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs
   do {
     if (signal?.aborted) {
       return null
     }
-    const session = findNewRootSession(cwd, snapshot, codexHome, allowModified)
+    const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow)
     if (session) {
       return session.path
     }
-    await delay(25, signal)
+    await delay(startWindow ? 250 : 25, signal)
   } while (Date.now() < deadline)
   return null
 }

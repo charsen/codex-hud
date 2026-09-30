@@ -4,12 +4,14 @@
 
 ### Fixed
 
+- Keep discovering a new session's first-message rollout after the ten-second startup window, using thread start times to exclude earlier and later launches while releasing the discovery lock for other sessions.
 - Wait up to ten seconds for a new Codex session's rollout so delayed shared app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
 
 ---
 
 ### 修复
 
+- 首条消息晚于十秒启动窗口时继续发现新会话记录，以线程启动时间排除前后其他会话，同时释放发现锁，避免阻塞后续启动。
 - 新 Codex 会话的记录发现等待时间恢复为十秒，避免共享 app-server 延迟启动时，Warp/tmux HUD 只显示项目和计时。
 
 ## 0.9.6 - 2026-09-19

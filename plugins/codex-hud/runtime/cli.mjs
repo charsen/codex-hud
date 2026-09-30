@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-l843UJML.mjs";
+import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-CoOZi_9a.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -2827,6 +2827,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 	const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null;
 	const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null;
 	const allowModifiedSession = isResumeInvocation(args);
+	const childStartedAt = Date.now();
 	const child = spawn(codex, args, {
 		cwd,
 		stdio: "inherit",
@@ -2844,12 +2845,31 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		child.once("error", () => finish(1));
 		child.once("exit", (code) => finish(code ?? 1));
 	});
-	if (bindingPath && snapshot && release) try {
-		let rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e4, discoveryController.signal, allowModifiedSession);
-		if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession);
-		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
-	} finally {
-		release();
+	if (bindingPath && snapshot && release) {
+		let rolloutPath = null;
+		let discoveryEndedAt = childStartedAt;
+		try {
+			rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e4, discoveryController.signal, allowModifiedSession, allowModifiedSession ? void 0 : {
+				after: childStartedAt,
+				before: Number.POSITIVE_INFINITY
+			});
+			if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession, allowModifiedSession ? void 0 : {
+				after: childStartedAt,
+				before: Number.POSITIVE_INFINITY
+			});
+			if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
+		} finally {
+			discoveryEndedAt = Date.now();
+			release();
+		}
+		while (!rolloutPath) {
+			if (childExited || allowModifiedSession) break;
+			rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e3, discoveryController.signal, false, {
+				after: childStartedAt,
+				before: discoveryEndedAt
+			});
+			if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
+		}
 	}
 	const exitCode = await exitCodePromise;
 	if (bindingPath) fs.rmSync(bindingPath, { force: true });
