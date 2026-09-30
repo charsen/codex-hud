@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Wait up to ten seconds for a new Codex session's rollout so delayed shared app-server startup does not leave the Warp/tmux HUD showing only the project and elapsed time.
+
+---
+
+### 修复
+
+- 新 Codex 会话的记录发现等待时间恢复为十秒，避免共享 app-server 延迟启动时，Warp/tmux HUD 只显示项目和计时。
+
 ## 0.9.6 - 2026-09-19
 
 ### Fixed
