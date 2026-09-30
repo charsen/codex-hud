@@ -178,31 +178,79 @@ export function queryAccountRateLimits(env: NodeJS.ProcessEnv, accountId: string
     return Promise.resolve(null)
   }
   return new Promise((resolve) => {
-    const child = spawn(executable, ['app-server', '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"'], {
+    const child = spawn(executable, [
+      // Quota reads must not refresh plugin marketplaces or bundles.
+      'app-server',
+      '--disable',
+      'plugins',
+      '--disable',
+      'remote_plugin',
+      '-c',
+      'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+    ], {
       cwd: getHudStateDirectory(env),
       // The npm Codex launcher uses /usr/bin/env node. Reuse the Node binary
       // already running this HUD even in a GUI pane with a minimal PATH.
       env: { ...env, PATH: [path.dirname(process.execPath), env.PATH].filter(Boolean).join(path.delimiter) },
       stdio: ['pipe', 'pipe', 'ignore'],
+      // Isolate the reader's process tree, including npm's native Codex child.
+      detached: process.platform !== 'win32',
     })
     let done = false
+    let closed = false
+    let settled = false
+    let result: RawRateLimits | null = null
     let buffer = ''
     let bytes = 0
     let expectedId = 0
     let timeout: NodeJS.Timeout
-    const kill = (): void => {
-      child.kill('SIGKILL')
+    let terminateTimeout: NodeJS.Timeout | undefined
+    let killTimeout: NodeJS.Timeout | undefined
+    const signalTree = (signal: NodeJS.Signals): void => {
+      try {
+        if (process.platform !== 'win32' && child.pid) {
+          process.kill(-child.pid, signal)
+        }
+        else {
+          child.kill(signal)
+        }
+      }
+      catch {
+        // The process group may already have exited.
+      }
+    }
+    const kill = (): void => signalTree('SIGKILL')
+    const settle = (): void => {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(timeout)
+      clearTimeout(terminateTimeout)
+      clearTimeout(killTimeout)
+      process.off('exit', kill)
+      resolve(result)
     }
     const finish = (value: RawRateLimits | null): void => {
       if (done) {
         return
       }
       done = true
+      result = value
       clearTimeout(timeout)
-      process.off('exit', kill)
-      child.stdin.destroy()
-      kill()
-      resolve(value)
+      if (closed) {
+        settle()
+        return
+      }
+      // EOF lets app-server finish cleanup. Do not kill the npm launcher first.
+      terminateTimeout = setTimeout(() => {
+        signalTree('SIGTERM')
+        killTimeout = setTimeout(() => {
+          kill()
+          settle()
+        }, 1000)
+      }, 1000)
+      child.stdin.end()
     }
     timeout = setTimeout(finish, ACCOUNT_USAGE_TIMEOUT_MS, null)
     process.once('exit', kill)
@@ -210,7 +258,13 @@ export function queryAccountRateLimits(env: NodeJS.ProcessEnv, accountId: string
       child.stdin.write(`${JSON.stringify(value)}\n`)
     }
     child.on('error', () => finish(null))
-    child.on('close', () => finish(null))
+    child.on('close', () => {
+      closed = true
+      if (!done) {
+        finish(null)
+      }
+      settle()
+    })
     child.stdin.on('error', () => finish(null))
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {

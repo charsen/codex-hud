@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  explicitResumeSessionId,
   installTerminationCleanup,
   isResumeInvocation,
   launchCodex,
@@ -30,6 +31,22 @@ function executable(directory: string, name: string, source: string): string {
   const filePath = path.join(directory, name)
   fs.writeFileSync(filePath, `#!/bin/sh\n${source}\n`, { mode: 0o755 })
   return filePath
+}
+
+function controlledChild(directory: string, source: string): { codex: string, finish: () => void } {
+  const script = path.join(directory, 'child.mjs')
+  const finished = path.join(directory, 'finished')
+  fs.writeFileSync(script, `
+    import fs from 'node:fs';
+    ${source}
+    setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(finished)})) process.exit(17);
+    }, 10);
+  `)
+  return {
+    codex: executable(directory, 'codex', `exec '${process.execPath}' '${script}'`),
+    finish: () => fs.writeFileSync(finished, ''),
+  }
 }
 
 function fixture(tmuxSource?: string): { cwd: string, env: NodeJS.ProcessEnv, output: string } {
@@ -102,6 +119,43 @@ describe('non-interfering launcher', () => {
     expect(waitForTmuxClient('session', 1_000, () => states.shift() ?? 1, value => pauses.push(value))).toBe(true)
     expect(pauses).toEqual([50, 50])
   })
+
+  it('extracts only an explicit resume UUID while skipping option values', () => {
+    const id = '01a0ed56-8fe3-7891-8748-c8f5e1f66c60'
+    expect(explicitResumeSessionId(['resume', id, '--dangerously-bypass-approvals-and-sandbox'])).toBe(id)
+    expect(explicitResumeSessionId(['--profile', 'resume', 'resume', '-i', 'image.png', id])).toBe(id)
+    expect(explicitResumeSessionId(['resume', '--', id.toUpperCase()])).toBe(id)
+    expect(explicitResumeSessionId(['resume', '--last'])).toBeNull()
+    expect(explicitResumeSessionId(['Explain resume support'])).toBeNull()
+  })
+
+  it('binds an explicit resume before the old rollout changes and preserves cleanup', async () => {
+    const { cwd, env } = fixture()
+    const sessions = path.join(env.CODEX_HOME!, 'sessions')
+    fs.mkdirSync(sessions, { recursive: true })
+    const id = '01a0ed56-8fe3-7891-8748-c8f5e1f66c60'
+    const rolloutPath = path.join(sessions, 'rollout-resumed.jsonl')
+    fs.writeFileSync(rolloutPath, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id, timestamp: '2026-09-29T13:24:30Z', cwd, source: 'vscode', thread_source: 'user' },
+    })}\n`)
+    const unchangedMtime = fs.statSync(rolloutPath).mtimeMs
+    const { codex, finish } = controlledChild(cwd, '')
+    env.CODEX_HUD_CODEX_BIN = codex
+    const bindingPath = path.join(cwd, 'binding.json')
+    const child = runCodexChild(['resume', id, '--dangerously-bypass-approvals-and-sandbox'], null, false, cwd, bindingPath, env)
+    try {
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 5_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+      expect(fs.statSync(rolloutPath).mtimeMs).toBe(unchangedMtime)
+      expect(fs.existsSync(path.join(env.CODEX_HOME!, 'codex-hud', 'bindings', 'locks'))).toBe(false)
+    }
+    finally {
+      finish()
+      expect(await child).toBe(17)
+    }
+    expect(fs.existsSync(bindingPath)).toBe(false)
+  }, 10_000)
 
   it('runs official Codex directly when tmux is unavailable', async () => {
     const { cwd, env, output } = fixture()
@@ -224,22 +278,27 @@ describe('non-interfering launcher', () => {
     const bindingPath = path.join(root, 'binding.json')
     fs.mkdirSync(cwd)
     fs.mkdirSync(sessions, { recursive: true })
-    const codex = executable(root, 'codex', [
-      `mkdir -p '${sessions}'`,
-      `printf '%s\\n' '{"timestamp":"2026-07-17T02:00:00Z","type":"session_meta","payload":{"id":"owned","timestamp":"2026-07-17T02:00:00Z","cwd":"${cwd}","source":"cli"}}' > '${path.join(sessions, 'rollout-owned.jsonl')}'`,
-      'sleep 0.2',
-      'exit 17',
-    ].join('\n'))
+    const rolloutPath = path.join(sessions, 'rollout-owned.jsonl')
+    const { codex, finish } = controlledChild(root, `
+      fs.writeFileSync(${JSON.stringify(rolloutPath)}, JSON.stringify({
+        type: 'session_meta', payload: { id: 'owned', timestamp: new Date().toISOString(), cwd: ${JSON.stringify(cwd)}, source: 'cli' }
+      }) + '\\n');
+    `)
     process.env.CODEX_HOME = codexHome
     process.env.CODEX_HUD_CODEX_BIN = codex
 
     const child = runCodexChild([], null, false, cwd, bindingPath)
-    await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null)
-    expect(readSessionBinding(bindingPath).rolloutPath).toBe(path.join(sessions, 'rollout-owned.jsonl'))
-    expect(readSessionBinding(bindingPath).codexPid).toBeGreaterThan(0)
-    expect(await child).toBe(17)
+    try {
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 5_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+      expect(readSessionBinding(bindingPath).codexPid).toBeGreaterThan(0)
+    }
+    finally {
+      finish()
+      expect(await child).toBe(17)
+    }
     expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
-  })
+  }, 10_000)
 
   it('binds a delayed app-server rollout before the child exits', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-delayed-child-'))
@@ -252,30 +311,60 @@ describe('non-interfering launcher', () => {
     fs.mkdirSync(sessions, { recursive: true })
     const metadata = (id: string) => JSON.stringify({
       type: 'session_meta',
-      payload: { id, timestamp: '2026-07-17T02:00:00Z', cwd, thread_source: 'user', source: 'vscode' },
+      payload: { id, timestamp: new Date().toISOString(), cwd, thread_source: 'user', source: 'vscode' },
     })
     fs.writeFileSync(path.join(sessions, 'rollout-existing.jsonl'), `${metadata('existing')}\n`)
     const rolloutPath = path.join(sessions, 'rollout-delayed.jsonl')
-    const codex = executable(root, 'codex', [
-      'sleep 1.5',
-      `printf '%s\\n' '${metadata('delayed')}' > '${rolloutPath}'`,
-      'sleep 1',
-      'exit 17',
-    ].join('\n'))
+    const { codex, finish } = controlledChild(root, `
+      const started = new Date().toISOString();
+      setTimeout(() => fs.writeFileSync(${JSON.stringify(rolloutPath)}, JSON.stringify({
+        type: 'session_meta', payload: { id: 'delayed', timestamp: started, cwd: ${JSON.stringify(cwd)}, thread_source: 'user', source: 'vscode' }
+      }) + '\\n'), 1_500);
+    `)
     process.env.CODEX_HOME = codexHome
     process.env.CODEX_HUD_CODEX_BIN = codex
 
     const child = runCodexChild([], null, false, cwd, bindingPath)
     try {
-      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 3_000)
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 5_000)
       expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
       expect(readSessionBinding(bindingPath).codexPid).toBeGreaterThan(0)
     }
     finally {
+      finish()
       expect(await child).toBe(17)
     }
     expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
-  })
+  }, 10_000)
+
+  it('binds a first-message rollout after the startup window without borrowing a later launch', async () => {
+    const { cwd, env } = fixture()
+    const sessions = path.join(env.CODEX_HOME!, 'sessions')
+    const bindingPath = path.join(cwd, 'binding.json')
+    const rolloutPath = path.join(sessions, 'rollout-owned.jsonl')
+    fs.mkdirSync(sessions, { recursive: true })
+    const { codex, finish } = controlledChild(cwd, `
+      const started = new Date().toISOString();
+      const write = (name, timestamp) => fs.writeFileSync(${JSON.stringify(sessions)} + '/rollout-' + name + '.jsonl', JSON.stringify({
+        type: 'session_meta', payload: { id: name, timestamp, cwd: ${JSON.stringify(cwd)}, source: 'vscode', thread_source: 'user' }
+      }) + '\\n');
+      setTimeout(() => write('later-launch', new Date().toISOString()), 11_000);
+      setTimeout(() => write('owned', started), 12_000);
+    `)
+    env.CODEX_HUD_CODEX_BIN = codex
+    const child = runCodexChild([], null, false, cwd, bindingPath, env)
+    try {
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 15_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+      const locks = path.join(env.CODEX_HOME!, 'codex-hud', 'bindings', 'locks')
+      expect(fs.readdirSync(locks)).toEqual([])
+    }
+    finally {
+      finish()
+      expect(await child).toBe(17)
+    }
+    expect(fs.existsSync(bindingPath)).toBe(false)
+  }, 18_000)
 
   it('returns the child exit code when Codex exits before creating a rollout', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-child-'))

@@ -5,9 +5,11 @@ import process from 'node:process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   findNewRootSession,
+  findRootSessionById,
   readSessionBinding,
   snapshotRootSessions,
   waitForNewRootSession,
+  waitForRootSessionById,
   writeSessionBinding,
 } from './session-binding.js'
 
@@ -42,6 +44,25 @@ describe('managed session binding', () => {
     const created = writeSession(codexHome, 'created-by-this-launch', cwd, '2026-07-17T01:02:00Z')
 
     expect(findNewRootSession(cwd, snapshot, codexHome)?.path).toBe(created)
+  })
+
+  it('finds only the requested root ID in the launch project', async () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-id-'))
+    directories.push(codexHome)
+    const cwd = path.join(codexHome, 'project')
+    fs.mkdirSync(cwd)
+    const target = writeSession(codexHome, 'target', cwd, '2026-07-17T01:00:00Z')
+    writeSession(codexHome, 'other', cwd, '2026-07-17T01:01:00Z')
+    expect(findRootSessionById(cwd, 'target', codexHome)?.path).toBe(target)
+    expect(findRootSessionById(path.join(cwd, 'nested'), 'target', codexHome)).toBeNull()
+    const data = JSON.parse(fs.readFileSync(target, 'utf8'))
+    data.payload.source = { subagent: { thread_spawn: {} } }
+    fs.writeFileSync(target, `${JSON.stringify(data)}\n`)
+    expect(findRootSessionById(cwd, 'target', codexHome)).toBeNull()
+    const controller = new AbortController()
+    const waiting = waitForRootSessionById(cwd, 'missing', codexHome, controller.signal)
+    controller.abort()
+    expect(await waiting).toBeNull()
   })
 
   it.skipIf(process.platform !== 'linux')('matches WSL drive paths when Codex records different casing', () => {
@@ -109,6 +130,23 @@ describe('managed session binding', () => {
     writeSessionBinding(bindingPath, rolloutPath)
 
     expect(readSessionBinding(bindingPath)).toEqual({ rolloutPath, codexPid: null })
+  })
+
+  it('uses thread start time to isolate delayed rollouts from adjacent launches', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-window-'))
+    directories.push(codexHome)
+    const cwd = path.join(codexHome, 'project')
+    fs.mkdirSync(cwd)
+    const snapshot = snapshotRootSessions(cwd, codexHome)
+    writeSession(codexHome, 'earlier-launch', cwd, '2026-07-17T01:00:00Z')
+    writeSession(codexHome, 'later-launch', cwd, '2026-07-17T01:00:20Z')
+    const window = {
+      after: Date.parse('2026-07-17T01:00:10Z'),
+      before: Date.parse('2026-07-17T01:00:20Z'),
+    }
+    expect(findNewRootSession(cwd, snapshot, codexHome, false, window)).toBeNull()
+    const owned = writeSession(codexHome, 'owned-delayed', cwd, '2026-07-17T01:00:10Z')
+    expect(findNewRootSession(cwd, snapshot, codexHome, false, window)?.path).toBe(owned)
   })
 
   it('publishes the Codex process before a rollout exists', () => {
