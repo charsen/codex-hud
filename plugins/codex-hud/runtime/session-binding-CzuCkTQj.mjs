@@ -1798,6 +1798,10 @@ function queryAccountRateLimits(env, accountId) {
 	return new Promise((resolve) => {
 		const child = spawn(executable, [
 			"app-server",
+			"--disable",
+			"plugins",
+			"--disable",
+			"remote_plugin",
 			"-c",
 			"chatgpt_base_url=\"https://chatgpt.com/backend-api/\""
 		], {
@@ -1810,24 +1814,52 @@ function queryAccountRateLimits(env, accountId) {
 				"pipe",
 				"pipe",
 				"ignore"
-			]
+			],
+			detached: process.platform !== "win32"
 		});
 		let done = false;
+		let closed = false;
+		let settled = false;
+		let result = null;
 		let buffer = "";
 		let bytes = 0;
 		let expectedId = 0;
 		let timeout;
-		const kill = () => {
-			child.kill("SIGKILL");
+		let terminateTimeout;
+		let killTimeout;
+		const signalTree = (signal) => {
+			try {
+				if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
+				else child.kill(signal);
+			} catch {}
+		};
+		const kill = () => signalTree("SIGKILL");
+		const settle = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			clearTimeout(terminateTimeout);
+			clearTimeout(killTimeout);
+			process.off("exit", kill);
+			resolve(result);
 		};
 		const finish = (value) => {
 			if (done) return;
 			done = true;
+			result = value;
 			clearTimeout(timeout);
-			process.off("exit", kill);
-			child.stdin.destroy();
-			kill();
-			resolve(value);
+			if (closed) {
+				settle();
+				return;
+			}
+			terminateTimeout = setTimeout(() => {
+				signalTree("SIGTERM");
+				killTimeout = setTimeout(() => {
+					kill();
+					settle();
+				}, 1e3);
+			}, 1e3);
+			child.stdin.end();
 		};
 		timeout = setTimeout(finish, ACCOUNT_USAGE_TIMEOUT_MS, null);
 		process.once("exit", kill);
@@ -1835,7 +1867,11 @@ function queryAccountRateLimits(env, accountId) {
 			child.stdin.write(`${JSON.stringify(value)}\n`);
 		};
 		child.on("error", () => finish(null));
-		child.on("close", () => finish(null));
+		child.on("close", () => {
+			closed = true;
+			if (!done) finish(null);
+			settle();
+		});
 		child.stdin.on("error", () => finish(null));
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk) => {
@@ -6726,11 +6762,22 @@ function rootSessions(cwd, codexHome = getCodexHome()) {
 	const normalizedCwd = pathIdentity(cwd);
 	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => pathIdentity(candidate.cwd) === normalizedCwd);
 }
+function findRootSessionById(cwd, sessionId, codexHome = getCodexHome()) {
+	return rootSessions(cwd, codexHome).find((candidate) => candidate.sessionId === sessionId) ?? null;
+}
+async function waitForRootSessionById(cwd, sessionId, codexHome = getCodexHome(), signal) {
+	while (true) {
+		if (signal?.aborted) return null;
+		const session = findRootSessionById(cwd, sessionId, codexHome);
+		if (session) return session.path;
+		await delay(250, signal);
+	}
+}
 function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
 	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
 }
-function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false) {
-	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).sort((left, right) => {
+function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false, startWindow) {
+	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).filter((candidate) => !startWindow || candidate.startTime.getTime() >= startWindow.after && candidate.startTime.getTime() < startWindow.before).sort((left, right) => {
 		const leftIsNew = !snapshot.has(left.path);
 		if (leftIsNew !== !snapshot.has(right.path)) return leftIsNew ? -1 : 1;
 		return left.startTime.getTime() - right.startTime.getTime();
@@ -6816,17 +6863,17 @@ async function acquireSessionDiscoveryLock(cwd, env = process.env) {
 		await delay(25);
 	}
 }
-async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false) {
+async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow) {
 	const deadline = Date.now() + timeoutMs;
 	do {
 		if (signal?.aborted) return null;
-		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified);
+		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow);
 		if (session) return session.path;
-		await delay(25, signal);
+		await delay(startWindow ? 250 : 25, signal);
 	} while (Date.now() < deadline);
 	return null;
 }
 
 //#endregion
-export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-CYnpm9p3.mjs.map
+export { readLatestLoggedRateLimits as A, shellCommand as B, rawConfigVersion as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, applyConfigMigrations as S, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, truncateAnsi as _, snapshotRootSessions as a, loadConfig as b, writeSessionBinding as c, hudRenderHeight as d, readCmuxPaneGeometry as f, renderHud as g, settleCmuxPaneHeight as h, readSessionBinding as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, buildHudState as l, resizeHudPane as m, createSessionBindingPath as n, waitForNewRootSession as o, resizeCmuxPane as p, resolveProcessSession as q, findRootSessionById as r, waitForRootSessionById as s, acquireSessionDiscoveryLock as t, desiredPaneHeight as u, visibleWidth as v, DEFAULT_CONFIG as w, reloadConfig as x, sliceAnsi as y, findExecutable as z };
+//# sourceMappingURL=session-binding-CzuCkTQj.mjs.map

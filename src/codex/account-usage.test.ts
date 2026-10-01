@@ -51,8 +51,13 @@ function response(percent = 65) {
   }
 }
 
-function server(result: unknown = response(), options: { fail?: boolean, wait?: boolean, authType?: string } = {}) {
+function server(result: unknown = response(), options: { fail?: boolean, wait?: boolean, authType?: string, ignoreEof?: boolean } = {}) {
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), kill: vi.fn() })
+  child.stdin.on('finish', () => {
+    if (!options.ignoreEof) {
+      queueMicrotask(() => child.emit('close', 0))
+    }
+  })
   const sent: Record<string, unknown>[] = []
   let held: (() => void) | undefined
   child.stdin.on('data', (chunk: Buffer) => {
@@ -95,14 +100,15 @@ describe('account quota polling', () => {
     const result = await refreshAccountUsage(endpoint, env)
     expect(result).toMatchObject({ enabled: true, failed: false, usage: { primary: { percent: 65 }, source: 'account', observedAt: new Date(now) } })
     expect(rpc.sent.map(message => message.method)).toEqual(['initialize', 'initialized', 'account/read', 'account/rateLimits/read'])
-    expect(rpc.child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(rpc.child.stdin.writableEnded).toBe(true)
+    expect(rpc.child.kill).not.toHaveBeenCalled()
     const directory = path.join(home, 'codex-hud', 'account-usage')
     const file = path.join(directory, fs.readdirSync(directory)[0])
     expect(fs.readFileSync(file, 'utf8')).not.toMatch(/secret|workspace-a|user-a|signature/)
     if (process.platform !== 'win32') {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600)
     }
-    expect(spawn).toHaveBeenCalledWith('/codex', ['app-server', '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"'], expect.objectContaining({ stdio: ['pipe', 'pipe', 'ignore'] }))
+    expect(spawn).toHaveBeenCalledWith('/codex', ['app-server', '--disable', 'plugins', '--disable', 'remote_plugin', '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"'], expect.objectContaining({ stdio: ['pipe', 'pipe', 'ignore'], detached: process.platform !== 'win32' }))
     expect(vi.mocked(spawn).mock.calls[0][2]?.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(process.execPath))
   })
 
@@ -161,11 +167,17 @@ describe('account quota polling', () => {
   it('bounds a hung process and releases the shared lease', async () => {
     const { env, home } = setup()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    const rpc = server(null, { wait: true })
+    const rpc = server(null, { wait: true, ignoreEof: true })
     const running = refreshAccountUsage(endpoint, env)
     await vi.advanceTimersByTimeAsync(ACCOUNT_USAGE_TIMEOUT_MS)
+    expect(rpc.child.stdin.writableEnded).toBe(true)
+    expect(rpc.child.kill).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(rpc.child.kill).toHaveBeenCalledWith('SIGTERM')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(rpc.child.kill).toHaveBeenCalledWith('SIGKILL')
     expect(await running).toMatchObject({ failed: true, usage: null })
-    expect(rpc.child.kill).toHaveBeenCalled()
+    expect(rpc.child.stdin.writableEnded).toBe(true)
     expect(fs.readdirSync(path.join(home, 'codex-hud', 'account-usage')).some(file => file.endsWith('.lock'))).toBe(false)
   })
 
@@ -208,7 +220,7 @@ describe('account quota polling', () => {
       const running = queryAccountRateLimits(env, 'workspace-a')
       rpc.child.stdout.write(value)
       expect(await running).toBeNull()
-      expect(rpc.child.kill).toHaveBeenCalled()
+      expect(rpc.child.stdin.writableEnded).toBe(true)
     }
     const rpc = server(null, { wait: true })
     const running = queryAccountRateLimits(env, 'workspace-a')

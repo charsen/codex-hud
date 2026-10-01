@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep discovering first-message rollouts beyond the startup window without borrowing threads from later launches; bind explicit resume UUIDs directly before the first message.
+- Disable plugin loading in quota-only app-server readers to prevent repeated marketplace staging copies; close readers normally with bounded process-tree cleanup.
+
+---
+
+### 修复
+
+- 超过启动等待窗口后继续发现首条消息产生的记录，同时排除后续启动的会话；显式 UUID 恢复会话时直接绑定对应记录。
+- 额度查询专用 app-server 禁用插件加载，避免反复生成市场暂存副本；正常关闭查询进程，并为进程树清理设置超时兜底。
+
 ## 0.9.7 - 2026-09-30
 
 ### Fixed
