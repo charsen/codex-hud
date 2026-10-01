@@ -56,6 +56,7 @@ interface StateThread {
   threadSource?: string | null
   agentPath?: string | null
   createdAtMs?: number
+  archived?: number
 }
 
 function addStateThreads(codexHome: string, threads: StateThread[]): void {
@@ -63,16 +64,22 @@ function addStateThreads(codexHome: string, threads: StateThread[]): void {
     ? 'NULL'
     : `'${value.replaceAll('\'', '\'\'')}'`
   execFileSync('sqlite3', [path.join(codexHome, 'state_5.sqlite'), [
-    'CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, cwd TEXT NOT NULL, thread_source TEXT, agent_path TEXT, created_at_ms INTEGER);',
+    'CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, cwd TEXT NOT NULL, thread_source TEXT, agent_path TEXT, created_at INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER, archived INTEGER NOT NULL DEFAULT 0);',
     ...threads.map(thread => `INSERT INTO threads VALUES (${[
       sqlValue(thread.id),
       sqlValue(thread.rolloutPath),
       sqlValue(thread.cwd),
       sqlValue(thread.threadSource === undefined ? 'user' : thread.threadSource),
       sqlValue(thread.agentPath ?? null),
+      Math.floor((thread.createdAtMs ?? 1) / 1000),
       thread.createdAtMs ?? 1,
+      thread.archived ?? 0,
     ].join(', ')});`),
   ].join('\n')])
+}
+
+function installManagedDaemon(codexHome: string): void {
+  fs.mkdirSync(path.join(codexHome, 'packages', 'app-server-daemon'), { recursive: true })
 }
 
 function request(ts: number, threadId: string, url: string): LogRow {
@@ -281,6 +288,24 @@ describe('session endpoint resolution', () => {
     )).toEqual(first)
   })
 
+  it('reads a WAL database that has no live writer', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-wal-'))
+    directories.push(codexHome)
+    const database = path.join(codexHome, 'logs_2.sqlite')
+    execFileSync('sqlite3', [database, [
+      'PRAGMA journal_mode=WAL;',
+      'CREATE TABLE logs (id INTEGER PRIMARY KEY, ts INTEGER, ts_nanos INTEGER, process_uuid TEXT, thread_id TEXT, target TEXT, feedback_log_body TEXT);',
+      `INSERT INTO logs VALUES (1, 10, 0, 'pid:1:uuid', 'thread-wal', 'codex_http_client::default_client', 'Request completed method=POST url=https://wal.example.com/v1/responses status=200 OK');`,
+    ].join('\n')])
+    // A clean close checkpoints the sidecar files away, but the header stays
+    // WAL: the state where a read-only connection cannot create the missing
+    // -shm and fails outright.
+    fs.rmSync(`${database}-wal`, { force: true })
+    fs.rmSync(`${database}-shm`, { force: true })
+
+    expect(resolve(codexHome, 'thread-wal')?.url).toBe('https://wal.example.com/v1/responses')
+  })
+
   it('resolves the root session owned by the Codex process', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
     directories.push(cwd)
@@ -350,6 +375,108 @@ describe('session endpoint resolution', () => {
       { CODEX_HOME: codexHome },
       clock,
     )).toBeNull()
+  })
+
+  it('binds a daemon-hosted session created by this launch', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const older = path.join(cwd, 'rollout-older.jsonl')
+    const mine = path.join(cwd, 'rollout-mine.jsonl')
+    const later = path.join(cwd, 'rollout-later.jsonl')
+    for (const rollout of [older, mine, later]) {
+      fs.writeFileSync(rollout, '')
+    }
+    // Daemon world: no log row is owned by the TUI process, and the daemon's
+    // own rows cannot disambiguate concurrent sessions. The thread registry
+    // must resolve this launch's session by cwd and creation time instead.
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-daemon-'))
+    directories.push(codexHome)
+    installManagedDaemon(codexHome)
+    addStateThreads(codexHome, [
+      { id: 'thread-older', rolloutPath: older, cwd, createdAtMs: 400_000 },
+      { id: 'thread-mine', rolloutPath: mine, cwd, createdAtMs: 1_002_000 },
+      { id: 'thread-later', rolloutPath: later, cwd, createdAtMs: 1_200_000 },
+    ])
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
+  })
+
+  it('does not adopt a daemon-hosted thread created before this launch', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const stale = path.join(cwd, 'rollout-stale.jsonl')
+    fs.writeFileSync(stale, '')
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-daemon-'))
+    directories.push(codexHome)
+    installManagedDaemon(codexHome)
+    addStateThreads(codexHome, [
+      { id: 'thread-stale', rolloutPath: stale, cwd, createdAtMs: 400_000 },
+    ])
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toBeNull()
+  })
+
+  it('skips subagent and agent threads in the daemon-hosted lookup', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const subagent = path.join(cwd, 'rollout-subagent.jsonl')
+    const agent = path.join(cwd, 'rollout-agent.jsonl')
+    const mine = path.join(cwd, 'rollout-mine.jsonl')
+    for (const rollout of [subagent, agent, mine]) {
+      fs.writeFileSync(rollout, '')
+    }
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-daemon-'))
+    directories.push(codexHome)
+    installManagedDaemon(codexHome)
+    addStateThreads(codexHome, [
+      { id: 'thread-subagent', rolloutPath: subagent, cwd, threadSource: 'subagent', createdAtMs: 1_000_500 },
+      { id: 'thread-agent', rolloutPath: agent, cwd, agentPath: '/agent.md', createdAtMs: 1_001_000 },
+      { id: 'thread-mine', rolloutPath: mine, cwd, createdAtMs: 1_002_000 },
+    ])
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
+  })
+
+  it('prefers the newest state schema for daemon-hosted lookups', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const mine = path.join(cwd, 'rollout-mine.jsonl')
+    fs.writeFileSync(mine, '')
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-daemon-'))
+    directories.push(codexHome)
+    installManagedDaemon(codexHome)
+    addStateThreads(codexHome, [
+      { id: 'thread-mine', rolloutPath: mine, cwd, createdAtMs: 1_002_000 },
+    ])
+    fs.renameSync(path.join(codexHome, 'state_5.sqlite'), path.join(codexHome, 'state_9.sqlite'))
+    fs.writeFileSync(path.join(codexHome, 'state.sqlite'), '')
+    fs.mkdirSync(path.join(codexHome, 'state_10.sqlite'))
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
   })
 
   it('ignores a process launched before this HUD pane', () => {

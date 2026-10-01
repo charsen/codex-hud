@@ -1002,23 +1002,69 @@ function findCodexLogDatabase(codexHome = getCodexHome()) {
 	}
 	return best?.file ?? null;
 }
+const STATE_DATABASE_PATTERN = /^state(?:_(\d+))?\.sqlite$/;
+/**
+* Codex keeps thread registry state in `state_<schema>.sqlite`; pick the newest
+* schema so a Codex upgrade that bumps the suffix keeps working.
+*/
+function findCodexStateDatabase(codexHome = getCodexHome()) {
+	let best = null;
+	let entries;
+	try {
+		entries = fs.readdirSync(codexHome, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		const match = STATE_DATABASE_PATTERN.exec(entry.name);
+		if (!match || !entry.isFile()) continue;
+		const version = Number(match[1] ?? 0);
+		if (!best || version > best.version) best = {
+			file: path.join(codexHome, entry.name),
+			version
+		};
+	}
+	return best?.file ?? null;
+}
+/**
+* Since Codex moved session hosting into a managed app-server daemon
+* (`~/.codex/packages/app-server-daemon`), the TUI process no longer writes
+* thread-bearing tracing rows and no longer holds the rollout file; the daemon
+* process does. Process-owned lookups must fall back to the daemon's own
+* thread registry when they find nothing.
+*/
+function managedAppServerDaemonInstalled(codexHome) {
+	try {
+		return fs.statSync(path.join(codexHome, "packages", "app-server-daemon")).isDirectory();
+	} catch {
+		return false;
+	}
+}
 function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		sql
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout
-	});
-	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
+	const attempt = (readonly) => {
+		const result = spawnSync("sqlite3", [
+			...readonly ? ["-readonly"] : [],
+			"-noheader",
+			"-batch",
+			database,
+			sql
+		], {
+			encoding: "utf8",
+			stdio: [
+				"ignore",
+				"pipe",
+				"ignore"
+			],
+			timeout
+		});
+		return {
+			status: result.status,
+			lines: typeof result.stdout === "string" ? result.stdout.split("\n") : []
+		};
+	};
+	const readonly = attempt(true);
+	if (readonly.status === 0) return readonly.lines;
+	return attempt(false).lines;
 }
 function inspectCodexLogSchema(codexHome = getCodexHome()) {
 	const database = findCodexLogDatabase(codexHome);
@@ -1108,7 +1154,8 @@ function shellSql(value) {
 */
 function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
 	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const cacheKey = `${getCodexHome(env)}:${codexPid}:${pathIdentity(cwd, env)}`;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${codexPid}:${pathIdentity(cwd, env)}`;
 	const cached = processSessionCache.get(cacheKey);
 	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
 	const remember = (value) => {
@@ -1118,44 +1165,53 @@ function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Da
 		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
 		return value ? { ...value } : null;
 	};
-	const database = findCodexLogDatabase(getCodexHome(env));
-	if (!database) return remember(null);
-	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
-	if (!ranges) return remember(null);
-	const ids = query(database, [
+	const stateDatabase = findCodexStateDatabase(codexHome);
+	if (!stateDatabase) return remember(null);
+	const resolvedCwd = path.resolve(cwd);
+	const rootThreadFilters = [
+		`   AND ${isCaseInsensitivePath(resolvedCwd, env) ? "cwd COLLATE NOCASE" : "cwd"} = '${shellSql(resolvedCwd)}'`,
+		"   AND (thread_source = 'user' OR thread_source IS NULL)",
+		"   AND (agent_path IS NULL OR agent_path = '')"
+	];
+	const selectThread = (conditions, order) => {
+		for (const row of query(stateDatabase, [
+			"SELECT id || '|' || rollout_path",
+			"  FROM threads",
+			...conditions,
+			` ORDER BY ${order}`,
+			" LIMIT 1;"
+		].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS)) {
+			const separator = row.indexOf("|");
+			if (separator < 0) continue;
+			const sessionId = row.slice(0, separator);
+			const rolloutPath = row.slice(separator + 1);
+			if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return {
+				sessionId,
+				rolloutPath
+			};
+		}
+		return null;
+	};
+	const database = findCodexLogDatabase(codexHome);
+	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
+	const ids = ranges ? query(database, [
 		"SELECT DISTINCT thread_id",
 		"  FROM logs",
 		" WHERE thread_id IS NOT NULL",
 		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
 		`   AND (${ranges})`,
 		" ORDER BY ts ASC, id ASC;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
-	if (ids.length === 0) return remember(null);
-	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
-	const stateDatabase = path.join(getCodexHome(env), "state_5.sqlite");
-	const resolvedCwd = path.resolve(cwd);
-	const cwdColumn = isCaseInsensitivePath(resolvedCwd, env) ? "cwd COLLATE NOCASE" : "cwd";
-	const rows = query(stateDatabase, [
-		"SELECT id || '|' || rollout_path",
-		"  FROM threads",
-		` WHERE id IN (${candidates})`,
-		`   AND ${cwdColumn} = '${shellSql(resolvedCwd)}'`,
-		"   AND (thread_source = 'user' OR thread_source IS NULL)",
-		"   AND (agent_path IS NULL OR agent_path = '')",
-		" ORDER BY created_at_ms ASC, id ASC",
-		" LIMIT 1;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
-	for (const row of rows) {
-		const separator = row.indexOf("|");
-		if (separator < 0) continue;
-		const sessionId = row.slice(0, separator);
-		const rolloutPath = row.slice(separator + 1);
-		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
-			sessionId,
-			rolloutPath
-		});
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim())) : [];
+	if (ids.length > 0) {
+		const owned = selectThread([` WHERE id IN (${ids.map((id) => `'${shellSql(id.trim())}'`).join(",")})`, ...rootThreadFilters], "created_at_ms ASC, id ASC");
+		if (owned) return remember(owned);
 	}
-	return remember(null);
+	if (!managedAppServerDaemonInstalled(codexHome)) return remember(null);
+	return remember(selectThread([
+		" WHERE archived = 0",
+		`   AND COALESCE(created_at_ms, created_at * 1000) >= ${Math.max(0, since.getTime() - 5e3)}`,
+		...rootThreadFilters
+	], "COALESCE(created_at_ms, created_at * 1000) ASC, id ASC"));
 }
 /**
 * The endpoint of a Codex process that has not created a session yet. Codex
@@ -6876,4 +6932,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readLatestLoggedRateLimits as A, shellCommand as B, rawConfigVersion as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, applyConfigMigrations as S, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, truncateAnsi as _, snapshotRootSessions as a, loadConfig as b, writeSessionBinding as c, hudRenderHeight as d, readCmuxPaneGeometry as f, renderHud as g, settleCmuxPaneHeight as h, readSessionBinding as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, buildHudState as l, resizeHudPane as m, createSessionBindingPath as n, waitForNewRootSession as o, resizeCmuxPane as p, resolveProcessSession as q, findRootSessionById as r, waitForRootSessionById as s, acquireSessionDiscoveryLock as t, desiredPaneHeight as u, visibleWidth as v, DEFAULT_CONFIG as w, reloadConfig as x, sliceAnsi as y, findExecutable as z };
-//# sourceMappingURL=session-binding-CzuCkTQj.mjs.map
+//# sourceMappingURL=session-binding-8pYeWlX1.mjs.map

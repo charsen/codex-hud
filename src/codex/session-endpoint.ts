@@ -179,16 +179,79 @@ export function findCodexLogDatabase(codexHome: string = getCodexHome()): string
   return best?.file ?? null
 }
 
+const STATE_DATABASE_PATTERN = /^state(?:_(\d+))?\.sqlite$/
+
+/**
+ * Codex keeps thread registry state in `state_<schema>.sqlite`; pick the newest
+ * schema so a Codex upgrade that bumps the suffix keeps working.
+ */
+export function findCodexStateDatabase(codexHome: string = getCodexHome()): string | null {
+  let best: { file: string, version: number } | null = null
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(codexHome, { withFileTypes: true })
+  }
+  catch {
+    return null
+  }
+  for (const entry of entries) {
+    const match = STATE_DATABASE_PATTERN.exec(entry.name)
+    if (!match || !entry.isFile()) {
+      continue
+    }
+    const version = Number(match[1] ?? 0)
+    if (!best || version > best.version) {
+      best = { file: path.join(codexHome, entry.name), version }
+    }
+  }
+  return best?.file ?? null
+}
+
+/**
+ * Since Codex moved session hosting into a managed app-server daemon
+ * (`~/.codex/packages/app-server-daemon`), the TUI process no longer writes
+ * thread-bearing tracing rows and no longer holds the rollout file; the daemon
+ * process does. Process-owned lookups must fall back to the daemon's own
+ * thread registry when they find nothing.
+ */
+function managedAppServerDaemonInstalled(codexHome: string): boolean {
+  try {
+    return fs.statSync(path.join(codexHome, 'packages', 'app-server-daemon')).isDirectory()
+  }
+  catch {
+    return false
+  }
+}
+
 function query(database: string, sql: string, timeout = QUERY_TIMEOUT_MS): string[] {
-  const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout,
-  })
-  // sqlite3 aborts on the first failing statement but keeps whatever earlier
-  // ones already printed, so a broken fallback query must not discard a good
-  // answer from the query before it.
-  return typeof result.stdout === 'string' ? result.stdout.split('\n') : []
+  const attempt = (readonly: boolean): { status: number | null, lines: string[] } => {
+    const result = spawnSync('sqlite3', [
+      ...(readonly ? ['-readonly'] : []),
+      '-noheader',
+      '-batch',
+      database,
+      sql,
+    ], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout,
+    })
+    // sqlite3 aborts on the first failing statement but keeps whatever earlier
+    // ones already printed, so a broken fallback query must not discard a good
+    // answer from the query before it.
+    return {
+      status: result.status,
+      lines: typeof result.stdout === 'string' ? result.stdout.split('\n') : [],
+    }
+  }
+  const readonly = attempt(true)
+  if (readonly.status === 0) {
+    return readonly.lines
+  }
+  // A WAL database left without a live writer has no -shm file, which a
+  // read-only connection cannot create and fails on with CANTOPEN. Every HUD
+  // statement is a SELECT, so reopening writable never modifies Codex state.
+  return attempt(false).lines
 }
 
 export function inspectCodexLogSchema(
@@ -290,7 +353,8 @@ export function resolveProcessSession(
   if (!Number.isInteger(codexPid) || codexPid <= 0) {
     return null
   }
-  const cacheKey = `${getCodexHome(env)}:${codexPid}:${pathIdentity(cwd, env)}`
+  const codexHome = getCodexHome(env)
+  const cacheKey = `${codexHome}:${codexPid}:${pathIdentity(cwd, env)}`
   const cached = processSessionCache.get(cacheKey)
   if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) {
     return cached.value ? { ...cached.value } : null
@@ -299,50 +363,74 @@ export function resolveProcessSession(
     setTimedCache(processSessionCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
     return value ? { ...value } : null
   }
-  const database = findCodexLogDatabase(getCodexHome(env))
-  if (!database) {
+  const stateDatabase = findCodexStateDatabase(codexHome)
+  if (!stateDatabase) {
     return remember(null)
   }
-  const ranges = processFamily(codexPid).map(processRange).join(' OR ')
-  if (!ranges) {
-    return remember(null)
-  }
-  const ids = query(database, [
-    'SELECT DISTINCT thread_id',
-    '  FROM logs',
-    ' WHERE thread_id IS NOT NULL',
-    `   AND ts >= ${Math.floor(since.getTime() / 1_000) - 60}`,
-    `   AND (${ranges})`,
-    ' ORDER BY ts ASC, id ASC;',
-  ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter(id => SESSION_ID_PATTERN.test(id.trim()))
-  if (ids.length === 0) {
-    return remember(null)
-  }
-  const candidates = ids.map(id => `'${shellSql(id.trim())}'`).join(',')
-  const stateDatabase = path.join(getCodexHome(env), 'state_5.sqlite')
   const resolvedCwd = path.resolve(cwd)
   const cwdColumn = isCaseInsensitivePath(resolvedCwd, env) ? 'cwd COLLATE NOCASE' : 'cwd'
-  const rows = query(stateDatabase, [
-    'SELECT id || \'|\' || rollout_path',
-    '  FROM threads',
-    ` WHERE id IN (${candidates})`,
+  const rootThreadFilters = [
     `   AND ${cwdColumn} = '${shellSql(resolvedCwd)}'`,
     '   AND (thread_source = \'user\' OR thread_source IS NULL)',
     '   AND (agent_path IS NULL OR agent_path = \'\')',
-    ' ORDER BY created_at_ms ASC, id ASC',
-    ' LIMIT 1;',
-  ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS)
-  for (const row of rows) {
-    const separator = row.indexOf('|')
-    if (separator < 0)
-      continue
-    const sessionId = row.slice(0, separator)
-    const rolloutPath = row.slice(separator + 1)
-    if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) {
-      return remember({ sessionId, rolloutPath })
+  ]
+  const selectThread = (conditions: string[], order: string): ProcessSession | null => {
+    for (const row of query(stateDatabase, [
+      'SELECT id || \'|\' || rollout_path',
+      '  FROM threads',
+      ...conditions,
+      ` ORDER BY ${order}`,
+      ' LIMIT 1;',
+    ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS)) {
+      const separator = row.indexOf('|')
+      if (separator < 0)
+        continue
+      const sessionId = row.slice(0, separator)
+      const rolloutPath = row.slice(separator + 1)
+      if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) {
+        return { sessionId, rolloutPath }
+      }
+    }
+    return null
+  }
+  const database = findCodexLogDatabase(codexHome)
+  const ranges = database ? processFamily(codexPid).map(processRange).join(' OR ') : ''
+  const ids = ranges
+    ? query(database as string, [
+        'SELECT DISTINCT thread_id',
+        '  FROM logs',
+        ' WHERE thread_id IS NOT NULL',
+        `   AND ts >= ${Math.floor(since.getTime() / 1_000) - 60}`,
+        `   AND (${ranges})`,
+        ' ORDER BY ts ASC, id ASC;',
+      ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter(id => SESSION_ID_PATTERN.test(id.trim()))
+    : []
+  if (ids.length > 0) {
+    const candidates = ids.map(id => `'${shellSql(id.trim())}'`).join(',')
+    const owned = selectThread([
+      ` WHERE id IN (${candidates})`,
+      ...rootThreadFilters,
+    ], 'created_at_ms ASC, id ASC')
+    if (owned) {
+      return remember(owned)
     }
   }
-  return remember(null)
+  // A managed app-server daemon hosts every session in one long-lived process,
+  // so TUI logs never carry the thread id and the rollout is daemon-owned too.
+  // Identify this launch's session from the daemon's thread registry instead:
+  // the first user thread created in this project at or after the launch. The
+  // daemon inserts the row when the TUI connects, well before the first
+  // message, and the small slack only absorbs launcher-to-pane startup delay.
+  if (!managedAppServerDaemonInstalled(codexHome)) {
+    return remember(null)
+  }
+  const createdAfter = Math.max(0, since.getTime() - 5_000)
+  const discovered = selectThread([
+    ' WHERE archived = 0',
+    `   AND COALESCE(created_at_ms, created_at * 1000) >= ${createdAfter}`,
+    ...rootThreadFilters,
+  ], 'COALESCE(created_at_ms, created_at * 1000) ASC, id ASC')
+  return remember(discovered)
 }
 
 /**

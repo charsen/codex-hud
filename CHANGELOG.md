@@ -4,15 +4,17 @@
 
 ### Fixed
 
-- Keep discovering first-message rollouts beyond the startup window without borrowing threads from later launches; bind explicit resume UUIDs directly before the first message.
-- Disable plugin loading in quota-only app-server readers to prevent repeated marketplace staging copies; close readers normally with bounded process-tree cleanup.
+- Keep discovering first-message rollouts beyond the startup window without borrowing later launches; bind explicit resume UUIDs directly.
+- Disable plugin loading in the quota-only app-server reader and close it with bounded process-tree cleanup.
+- Resolve Codex 0.159.3+ daemon-hosted sessions from the thread registry when TUI logs carry no thread id, and reopen WAL state databases writable when a read-only connection fails.
 
 ---
 
 ### 修复
 
-- 超过启动等待窗口后继续发现首条消息产生的记录，同时排除后续启动的会话；显式 UUID 恢复会话时直接绑定对应记录。
-- 额度查询专用 app-server 禁用插件加载，避免反复生成市场暂存副本；正常关闭查询进程，并为进程树清理设置超时兜底。
+- 启动窗口过后继续发现首条消息产生的记录，且不误借后续启动的会话；显式 UUID 恢复会话直接绑定。
+- 额度查询专用 app-server 禁用插件加载，并按进程树有界关闭。
+- 适配 Codex 0.159.3+ 共享守护进程托管的会话：TUI 日志无 thread id 时改由 Codex 状态库绑定；WAL 数据库只读打开失败时可写重开。
 
 ## 0.9.7 - 2026-09-30
 
