@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.8 - 2026-10-01
+
 ### Fixed
 
 - Keep discovering first-message rollouts beyond the startup window without borrowing later launches; bind explicit resume UUIDs directly.
