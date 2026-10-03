@@ -132,6 +132,37 @@ describe('session endpoint resolution', () => {
     expect(resolve(codexHome, 'thread-client')?.url).toBe('https://current.example.com/v1/responses')
   })
 
+  it.each([
+    ['wss://chatgpt.com/backend-api/codex/responses', 'https://chatgpt.com/backend-api/codex/responses', true],
+    ['wss://relay.example.com/v1/responses', 'https://relay.example.com/v1/responses', false],
+    ['ws://localhost:8080/responses', 'http://localhost:8080/responses', false],
+  ])('reads the successful WebSocket endpoint %s without trusting relays', (websocket, http, trusted) => {
+    const codexHome = codexHomeWithLogs([
+      { ...request(10, 'thread-socket', ''), target: 'codex_api::endpoint::responses_websocket', body: `successfully connected to websocket: ${websocket}` },
+      request(20, 'another-thread', 'https://other.example.com/responses'),
+    ])
+    const endpoint = resolve(codexHome, 'thread-socket')
+    expect(endpoint).toEqual({ url: http, source: 'log-request' })
+    expect(isOfficialOpenAIEndpoint(endpoint?.url)).toBe(trusted)
+  })
+
+  it('orders HTTP and successful WebSocket observations together and ignores connection attempts', () => {
+    const socket = (ts: number, body: string): LogRow => ({
+      ...request(ts, 'thread-socket', ''),
+      target: 'codex_api::endpoint::responses_websocket',
+      body,
+    })
+    const codexHome = codexHomeWithLogs([
+      request(10, 'thread-socket', 'https://older.example.com/responses'),
+      socket(20, 'successfully connected to websocket: wss://chatgpt.com/responses'),
+      socket(30, 'connecting to websocket: wss://failed.example.com/responses'),
+    ])
+    expect(resolve(codexHome, 'thread-socket')?.url).toBe('https://chatgpt.com/responses')
+    const sql = 'INSERT INTO logs VALUES (4, 40, 0, \'pid:1:uuid\', \'thread-socket\', \'codex_http_client::client\', \'url=https://newer.example.com/responses\');'
+    execFileSync('sqlite3', [path.join(codexHome, 'logs_2.sqlite'), sql])
+    expect(resolve(codexHome, 'thread-socket')?.url).toBe('https://newer.example.com/responses')
+  })
+
   it('breaks ties within one second by insertion order', () => {
     const codexHome = codexHomeWithLogs([
       request(10, 'thread-a', 'https://first.example.com/v1/responses'),

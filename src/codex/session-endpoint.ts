@@ -7,7 +7,8 @@ import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
 
 /**
- * Where an endpoint came from. `log-request` is a URL Codex actually posted to;
+ * Where an endpoint came from. `log-request` is a URL Codex posted to or
+ * successfully connected to over WebSocket;
  * `log-init` is the provider Codex resolved when the session started, looked up
  * by session or, before a session exists, by the Codex process itself.
  */
@@ -32,6 +33,7 @@ const STORED_ENDPOINT_MAX_BYTES = 4 * 1024
 // `ts` stores whole seconds, so several rows routinely share one value; the
 // rowid tiebreak keeps "newest" meaning insertion order rather than scan order.
 const NEWEST_FIRST = 'ORDER BY ts DESC, id DESC LIMIT 1'
+const WEBSOCKET_CONNECTED = 'successfully connected to websocket: '
 
 const endpointCache = new Map<string, { at: number, value: SessionEndpoint | null }>()
 const processSessionCache = new Map<string, { at: number, value: ProcessSession | null }>()
@@ -213,6 +215,11 @@ export function inspectCodexLogSchema(
 
 function firstUrl(value: string): string | null {
   const url = value.trim().split(/[\s"]/)[0]
+  // Quota/auth consumers use the HTTP origin of the same WebSocket endpoint.
+  if (url.startsWith('wss://'))
+    return `https://${url.slice(6)}`
+  if (url.startsWith('ws://'))
+    return `http://${url.slice(5)}`
   return url.startsWith('http') ? url : null
 }
 
@@ -433,11 +440,16 @@ export function resolveSessionEndpoint(
     return remember(cached?.value ?? readStoredEndpoint(sessionId, env, now))
   }
   const lines = query(database, [
-    `SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
+    `SELECT 'request|' || CASE`,
+    ` WHEN target = 'codex_api::endpoint::responses_websocket'`,
+    ` THEN substr(feedback_log_body, instr(feedback_log_body, '${WEBSOCKET_CONNECTED}') + ${WEBSOCKET_CONNECTED.length}, 200)`,
+    ` ELSE substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200) END`,
     `  FROM logs`,
     ` WHERE thread_id = '${sessionId}'`,
-    `   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
-    `   AND instr(feedback_log_body, 'url=') > 0`,
+    `   AND ((target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+    `         AND instr(feedback_log_body, 'url=') > 0)`,
+    `     OR (target = 'codex_api::endpoint::responses_websocket'`,
+    `         AND instr(feedback_log_body, '${WEBSOCKET_CONNECTED}') > 0))`,
     ` ${NEWEST_FIRST};`,
     // One Codex process can host several sessions in turn, each writing its own
     // threadless init row, so bound the fallback to this thread's own lifetime.

@@ -164,14 +164,16 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       sessionWatcher?.close()
       sessionWatcher = null
     }
-    if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
+    // A live binding can change after /new, resume, or an explicit repair.
+    // Never rediscover by cwd once bound: shared app-servers host other threads.
+    if (!options.sessionPath && (options.sessionBindingPath || !currentSessionPath) && nowMs - lastDiscoveryAt >= 250) {
       lastDiscoveryAt = nowMs
       const binding = options.sessionBindingPath
         ? readSessionBinding(options.sessionBindingPath)
         : null
       codexPid = binding?.codexPid ?? codexPid
       let bound = binding?.rolloutPath ?? null
-      if (!bound && options.sessionBindingPath && codexPid) {
+      if (!bound && !currentSessionPath && options.sessionBindingPath && codexPid) {
         const processSession = resolveProcessSession(
           codexPid,
           options.cwd,
@@ -185,7 +187,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       const discovered = bound
         ? { path: bound }
         : options.sessionBindingPath
-          ? null
+          ? currentSessionPath ? { path: currentSessionPath } : null
           : findActiveSession({
               cwd: options.cwd,
               launchedAfter: options.launchedAfter,

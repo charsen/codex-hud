@@ -371,6 +371,13 @@ codex-hud hud-version
 
 Common cases:
 
+For a HUD stuck on an older conversation, repair its confirmed binding with
+`codex-hud bind --session-binding <binding-file> --session-id <root-UUID> --cwd <project>`.
+When invoked by a Codex tool, `--session-id` defaults to `CODEX_THREAD_ID`.
+Use the binding file passed to that HUD pane's renderer; other panes are unaffected.
+Running renderers follow binding updates without restarting Codex. Shared app-server
+threads cannot be attributed by cwd alone, so this command requires an exact root ID.
+
 | Symptom                                             | Fix                                                       |
 | --------------------------------------------------- | --------------------------------------------------------- |
 | Setup succeeded, but the current session has no HUD | Exit Codex, run `hash -r`, and start `codex` again        |

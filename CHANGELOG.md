@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.10.8 - 2026-10-03
+
+### Fixed
+
+- Follow explicit session-binding updates in running HUD renderers instead of remaining attached to an older conversation. Add `codex-hud bind` to repair a confirmed root-session binding without restarting Codex or borrowing concurrent threads.
+- Recognize successful Codex WebSocket connections when resolving the active session's endpoint, restoring trusted ChatGPT quota display while keeping relay origins and connection attempts untrusted.
+
+---
+
+### 修复
+
+- 运行中的 HUD 跟随明确的会话绑定更新，避免停留在旧会话；新增 `codex-hud bind`，按确认的主会话 ID 修复绑定，无需重启 Codex，也不会借用并行会话。
+- 识别 Codex 已成功建立的 WebSocket 连接，恢复当前会话的可信 ChatGPT 额度展示；中继来源和连接尝试仍不会获得额度信任。
+
 ## 0.10.7 - 2026-09-30
 
 ### Fixed

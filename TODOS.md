@@ -1,5 +1,8 @@
 # TODOs
 
+- [x] Repair the current stale session binding and make running renderers follow explicit binding updates without borrowing concurrent threads.
+- [x] Recognize successful WebSocket endpoint observations and restore this session's trusted ChatGPT quota display.
+
 - [x] Stop quota polling from creating marketplace upgrade copies and refresh running HUD renderers.
 
 - [x] Apply and verify the explicit resume-ID binding fix in the managed runtime.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readLatestLoggedRateLimits, B as shellCommand, C as rawConfigVersion, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, I as selectAccountUsage, J as resolveSessionEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, N as resolveUsageData, O as inspectLoggedRateLimitTargets, Q as getLegacyStateDirectory, R as HUD_VERSION, S as applyConfigMigrations, T as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, U as findCodexLogDatabase, V as shellQuote, W as inspectCodexLogSchema, X as getConfigPath, Y as getCodexHome, Z as getHudStateDirectory, a as snapshotRootSessions, b as loadConfig, c as writeSessionBinding, g as renderHud, k as persistRolloutRateLimits, l as buildHudState, n as createSessionBindingPath, o as waitForNewRootSession, r as findRootSessionById, s as waitForRootSessionById, t as acquireSessionDiscoveryLock, w as DEFAULT_CONFIG, z as findExecutable } from "./session-binding-CP2KyZi4.mjs";
+import { A as readLatestLoggedRateLimits, B as shellCommand, C as waitForNewRootSession, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, I as selectAccountUsage, J as resolveSessionEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, N as resolveUsageData, O as inspectLoggedRateLimitTargets, Q as getLegacyStateDirectory, R as HUD_VERSION, S as snapshotRootSessions, T as writeSessionBinding, U as findCodexLogDatabase, V as shellQuote, W as inspectCodexLogSchema, X as getConfigPath, Y as getCodexHome, Z as getHudStateDirectory, _ as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, b as findRootSessionById, c as renderHud, f as loadConfig, g as DEFAULT_CONFIG, h as rawConfigVersion, k as persistRolloutRateLimits, m as applyConfigMigrations, t as buildHudState, v as acquireSessionDiscoveryLock, w as waitForRootSessionById, x as readSessionBinding, y as createSessionBindingPath, z as findExecutable } from "./state-DNUFmlg2.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -12,6 +12,36 @@ import { fileURLToPath } from "node:url";
 
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
+
+//#endregion
+//#region src/commands/bind.ts
+/** Explicit identity is required: cwd/mtime cannot identify a shared-server TUI. */
+function runBind(args, env = process$1.env) {
+	let cwd = process$1.cwd();
+	let sessionId = env.CODEX_THREAD_ID;
+	let bindingPath;
+	for (let index = 0; index < args.length; index += 1) {
+		const option = args[index];
+		if (![
+			"--cwd",
+			"--session-id",
+			"--session-binding"
+		].includes(option) || !args[index + 1]) throw new Error(`Invalid bind option: ${option}`);
+		const value = args[++index];
+		if (option === "--cwd") cwd = value;
+		else if (option === "--session-id") sessionId = value;
+		else bindingPath = value;
+	}
+	if (!bindingPath || !fs.existsSync(bindingPath)) throw new Error("bind requires an existing --session-binding file.");
+	if (!sessionId) throw new Error("bind requires --session-id or CODEX_THREAD_ID.");
+	const session = findRootSessionById(cwd, sessionId, env.CODEX_HOME);
+	if (!session) throw new Error("The requested root session was not found in this project.");
+	const binding = readSessionBinding(bindingPath);
+	if (!binding.codexPid || binding.codexPid <= 0) throw new Error("The binding has no valid Codex process; refusing to replace it.");
+	writeSessionBinding(bindingPath, session.path, binding.codexPid);
+	process$1.stdout.write(`HUD bound to session ${session.sessionId}.\n`);
+	return 0;
+}
 
 //#endregion
 //#region node_modules/.pnpm/fast-string-truncated-width@3.0.3/node_modules/fast-string-truncated-width/dist/utils.js
@@ -3006,6 +3036,7 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
+  codex-hud bind --session-binding <path> [--session-id <UUID>] [--cwd <path>]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal|presentation]
                   [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans] [--layout compact|expanded] [--yes]
@@ -3239,6 +3270,10 @@ async function main(args = process$1.argv.slice(2)) {
 	}
 	if (command === "configure") {
 		process$1.exitCode = await runConfigure(args.slice(1));
+		return;
+	}
+	if (command === "bind") {
+		process$1.exitCode = runBind(args.slice(1));
 		return;
 	}
 	if (command === "setup") {

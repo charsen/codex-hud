@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-10-03
+
+- Symptom: a long-running HUD displays an older conversation after the active root thread changes. Cause: the renderer reads its binding only before the first rollout is attached; shared app-server threads cannot be attributed to the TUI by process logs. Fix: reread explicit binding updates during rendering and use `bind` with the confirmed root ID, preserving the Codex process and refusing foreign-project/subagent targets.
+
+- Symptom: a confirmed ChatGPT session loses quota display after moving to WebSocket transport. Cause: endpoint discovery only recognizes HTTP client request logs. Fix: accept successful connections from `codex_api::endpoint::responses_websocket`, normalize their transport URL to its HTTP counterpart, and order them alongside HTTP observations for the same thread; connection attempts and relay origins do not grant subscription trust.
+
 ## 2026-09-30
 
 - Symptom: minute-by-minute quota reads accumulate marketplace upgrade copies in Codex temporary storage. Cause: the quota reader starts app-server with plugin loading enabled and immediately SIGKILLs its launcher after a response. Fix: disable local and remote plugins for that reader only, close stdin normally, and bound shutdown with process-group termination so npm descendants are included.

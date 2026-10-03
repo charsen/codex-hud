@@ -16,6 +16,7 @@ import { RolloutParser } from './codex/rollout-parser.js'
 import { findCodexLogDatabase, inspectCodexLogSchema, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { hasTrustedOpenAiAuth } from './collectors/session-metadata.js'
+import { runBind } from './commands/bind.js'
 import { runConfigure } from './commands/configure.js'
 import { inspectManagedInstall, runInstall, runUninstall } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
@@ -37,6 +38,7 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
+  codex-hud bind --session-binding <path> [--session-id <UUID>] [--cwd <path>]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal|presentation]
                   [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans] [--layout compact|expanded] [--yes]
@@ -331,6 +333,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === 'configure') {
     process.exitCode = await runConfigure(args.slice(1))
+    return
+  }
+  if (command === 'bind') {
+    process.exitCode = runBind(args.slice(1))
     return
   }
   if (command === 'setup') {

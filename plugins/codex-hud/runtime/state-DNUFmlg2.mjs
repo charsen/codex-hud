@@ -832,6 +832,7 @@ const STORED_ENDPOINT_MAX_AGE_MS = 720 * 60 * 6e4;
 const STORED_ENDPOINT_MAX_ENTRIES = 256;
 const STORED_ENDPOINT_MAX_BYTES = 4 * 1024;
 const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
+const WEBSOCKET_CONNECTED = "successfully connected to websocket: ";
 const endpointCache = /* @__PURE__ */ new Map();
 const processSessionCache = /* @__PURE__ */ new Map();
 function storedEndpointDirectory(env) {
@@ -973,6 +974,8 @@ function inspectCodexLogSchema(codexHome = getCodexHome()) {
 }
 function firstUrl(value) {
 	const url = value.trim().split(/[\s"]/)[0];
+	if (url.startsWith("wss://")) return `https://${url.slice(6)}`;
+	if (url.startsWith("ws://")) return `http://${url.slice(5)}`;
 	return url.startsWith("http") ? url : null;
 }
 function endpointOrigin(value) {
@@ -1147,11 +1150,16 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 	const database = findCodexLogDatabase(codexHome);
 	if (!database) return remember(cached?.value ?? readStoredEndpoint(sessionId, env, now));
 	const lines = query(database, [
-		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
+		`SELECT 'request|' || CASE`,
+		` WHEN target = 'codex_api::endpoint::responses_websocket'`,
+		` THEN substr(feedback_log_body, instr(feedback_log_body, '${WEBSOCKET_CONNECTED}') + 37, 200)`,
+		` ELSE substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200) END`,
 		`  FROM logs`,
 		` WHERE thread_id = '${sessionId}'`,
-		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
-		`   AND instr(feedback_log_body, 'url=') > 0`,
+		`   AND ((target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+		`         AND instr(feedback_log_body, 'url=') > 0)`,
+		`     OR (target = 'codex_api::endpoint::responses_websocket'`,
+		`         AND instr(feedback_log_body, '${WEBSOCKET_CONNECTED}') > 0))`,
 		` ${NEWEST_FIRST};`,
 		INIT_ROW,
 		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
@@ -1452,7 +1460,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.10.7";
+var version = "0.10.8";
 
 //#endregion
 //#region src/version.ts
@@ -3197,6 +3205,135 @@ function findActiveSession(options) {
 	const launchedAfterMs = options.launchedAfter?.getTime() ?? 0;
 	const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true;
 	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => candidate.startTime.getTime() >= launchedAfterMs || allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
+}
+
+//#endregion
+//#region src/runtime/session-binding.ts
+const DISCOVERY_TIMEOUT_MS = 1e4;
+const LOCK_STALE_MS = 3e4;
+function normalizedPath(value) {
+	let resolved;
+	try {
+		resolved = fs.realpathSync.native(value);
+	} catch {
+		resolved = path.resolve(value);
+	}
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function rootSessions(cwd, codexHome = getCodexHome()) {
+	const normalizedCwd = normalizedPath(cwd);
+	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => normalizedPath(candidate.cwd) === normalizedCwd);
+}
+function findRootSessionById(cwd, sessionId, codexHome = getCodexHome()) {
+	return rootSessions(cwd, codexHome).find((candidate) => candidate.sessionId === sessionId) ?? null;
+}
+async function waitForRootSessionById(cwd, sessionId, codexHome = getCodexHome(), signal) {
+	while (true) {
+		if (signal?.aborted) return null;
+		const session = findRootSessionById(cwd, sessionId, codexHome);
+		if (session) return session.path;
+		await delay(250, signal);
+	}
+}
+function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
+	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
+}
+function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false, startWindow) {
+	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).filter((candidate) => !startWindow || candidate.startTime.getTime() >= startWindow.after && candidate.startTime.getTime() < startWindow.before).sort((left, right) => {
+		const leftIsNew = !snapshot.has(left.path);
+		if (leftIsNew !== !snapshot.has(right.path)) return leftIsNew ? -1 : 1;
+		return left.startTime.getTime() - right.startTime.getTime();
+	})[0] ?? null;
+}
+function createSessionBindingPath(cwd, env = process.env) {
+	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
+	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
+}
+/**
+* Written once right after Codex is spawned so the HUD can identify the process
+* before Codex creates a rollout, then again with the rollout once it appears.
+*/
+function writeSessionBinding(bindingPath, rolloutPath, codexPid) {
+	fs.mkdirSync(path.dirname(bindingPath), {
+		recursive: true,
+		mode: 448
+	});
+	const temporaryPath = `${bindingPath}.${process.pid}.tmp`;
+	const payload = {
+		...rolloutPath ? { rolloutPath } : {},
+		...codexPid ? { codexPid } : {}
+	};
+	fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, { mode: 384 });
+	fs.renameSync(temporaryPath, bindingPath);
+}
+function readSessionBinding(bindingPath) {
+	try {
+		const value = JSON.parse(fs.readFileSync(bindingPath, "utf8"));
+		return {
+			rolloutPath: typeof value.rolloutPath === "string" && fs.existsSync(value.rolloutPath) ? value.rolloutPath : null,
+			codexPid: typeof value.codexPid === "number" && Number.isInteger(value.codexPid) ? value.codexPid : null
+		};
+	} catch {
+		return {
+			rolloutPath: null,
+			codexPid: null
+		};
+	}
+}
+function lockPath(cwd, env = process.env) {
+	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
+	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
+}
+function delay(milliseconds, signal) {
+	if (signal?.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		let timer;
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		timer = setTimeout(finish, milliseconds);
+		signal?.addEventListener("abort", finish, { once: true });
+	});
+}
+async function acquireSessionDiscoveryLock(cwd, env = process.env) {
+	const target = lockPath(cwd, env);
+	fs.mkdirSync(path.dirname(target), {
+		recursive: true,
+		mode: 448
+	});
+	while (true) try {
+		fs.mkdirSync(target, { mode: 448 });
+		return () => fs.rmSync(target, {
+			recursive: true,
+			force: true
+		});
+	} catch (error) {
+		if (error.code !== "EEXIST") throw error;
+		try {
+			if (Date.now() - fs.statSync(target).mtimeMs > LOCK_STALE_MS) {
+				fs.rmSync(target, {
+					recursive: true,
+					force: true
+				});
+				continue;
+			}
+		} catch {
+			continue;
+		}
+		await delay(25);
+	}
+}
+async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow) {
+	const deadline = Date.now() + timeoutMs;
+	do {
+		if (signal?.aborted) return null;
+		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow);
+		if (session) return session.path;
+		await delay(startWindow ? 250 : 25, signal);
+	} while (Date.now() < deadline);
+	return null;
 }
 
 //#endregion
@@ -6744,134 +6881,5 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 }
 
 //#endregion
-//#region src/runtime/session-binding.ts
-const DISCOVERY_TIMEOUT_MS = 1e4;
-const LOCK_STALE_MS = 3e4;
-function normalizedPath(value) {
-	let resolved;
-	try {
-		resolved = fs.realpathSync.native(value);
-	} catch {
-		resolved = path.resolve(value);
-	}
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-function rootSessions(cwd, codexHome = getCodexHome()) {
-	const normalizedCwd = normalizedPath(cwd);
-	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => normalizedPath(candidate.cwd) === normalizedCwd);
-}
-function findRootSessionById(cwd, sessionId, codexHome = getCodexHome()) {
-	return rootSessions(cwd, codexHome).find((candidate) => candidate.sessionId === sessionId) ?? null;
-}
-async function waitForRootSessionById(cwd, sessionId, codexHome = getCodexHome(), signal) {
-	while (true) {
-		if (signal?.aborted) return null;
-		const session = findRootSessionById(cwd, sessionId, codexHome);
-		if (session) return session.path;
-		await delay(250, signal);
-	}
-}
-function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
-	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
-}
-function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModified = false, startWindow) {
-	return rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) || allowModified && candidate.mtimeMs > (snapshot.get(candidate.path) ?? 0)).filter((candidate) => !startWindow || candidate.startTime.getTime() >= startWindow.after && candidate.startTime.getTime() < startWindow.before).sort((left, right) => {
-		const leftIsNew = !snapshot.has(left.path);
-		if (leftIsNew !== !snapshot.has(right.path)) return leftIsNew ? -1 : 1;
-		return left.startTime.getTime() - right.startTime.getTime();
-	})[0] ?? null;
-}
-function createSessionBindingPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
-	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
-}
-/**
-* Written once right after Codex is spawned so the HUD can identify the process
-* before Codex creates a rollout, then again with the rollout once it appears.
-*/
-function writeSessionBinding(bindingPath, rolloutPath, codexPid) {
-	fs.mkdirSync(path.dirname(bindingPath), {
-		recursive: true,
-		mode: 448
-	});
-	const temporaryPath = `${bindingPath}.${process.pid}.tmp`;
-	const payload = {
-		...rolloutPath ? { rolloutPath } : {},
-		...codexPid ? { codexPid } : {}
-	};
-	fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, { mode: 384 });
-	fs.renameSync(temporaryPath, bindingPath);
-}
-function readSessionBinding(bindingPath) {
-	try {
-		const value = JSON.parse(fs.readFileSync(bindingPath, "utf8"));
-		return {
-			rolloutPath: typeof value.rolloutPath === "string" && fs.existsSync(value.rolloutPath) ? value.rolloutPath : null,
-			codexPid: typeof value.codexPid === "number" && Number.isInteger(value.codexPid) ? value.codexPid : null
-		};
-	} catch {
-		return {
-			rolloutPath: null,
-			codexPid: null
-		};
-	}
-}
-function lockPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
-	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
-}
-function delay(milliseconds, signal) {
-	if (signal?.aborted) return Promise.resolve();
-	return new Promise((resolve) => {
-		let timer;
-		const finish = () => {
-			clearTimeout(timer);
-			signal?.removeEventListener("abort", finish);
-			resolve();
-		};
-		timer = setTimeout(finish, milliseconds);
-		signal?.addEventListener("abort", finish, { once: true });
-	});
-}
-async function acquireSessionDiscoveryLock(cwd, env = process.env) {
-	const target = lockPath(cwd, env);
-	fs.mkdirSync(path.dirname(target), {
-		recursive: true,
-		mode: 448
-	});
-	while (true) try {
-		fs.mkdirSync(target, { mode: 448 });
-		return () => fs.rmSync(target, {
-			recursive: true,
-			force: true
-		});
-	} catch (error) {
-		if (error.code !== "EEXIST") throw error;
-		try {
-			if (Date.now() - fs.statSync(target).mtimeMs > LOCK_STALE_MS) {
-				fs.rmSync(target, {
-					recursive: true,
-					force: true
-				});
-				continue;
-			}
-		} catch {
-			continue;
-		}
-		await delay(25);
-	}
-}
-async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow) {
-	const deadline = Date.now() + timeoutMs;
-	do {
-		if (signal?.aborted) return null;
-		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow);
-		if (session) return session.path;
-		await delay(startWindow ? 250 : 25, signal);
-	} while (Date.now() < deadline);
-	return null;
-}
-
-//#endregion
-export { readLatestLoggedRateLimits as A, shellCommand as B, rawConfigVersion as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, applyConfigMigrations as S, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, truncateAnsi as _, snapshotRootSessions as a, loadConfig as b, writeSessionBinding as c, hudRenderHeight as d, readCmuxPaneGeometry as f, renderHud as g, settleCmuxPaneHeight as h, readSessionBinding as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, buildHudState as l, resizeHudPane as m, createSessionBindingPath as n, waitForNewRootSession as o, resizeCmuxPane as p, resolveProcessSession as q, findRootSessionById as r, waitForRootSessionById as s, acquireSessionDiscoveryLock as t, desiredPaneHeight as u, visibleWidth as v, DEFAULT_CONFIG as w, reloadConfig as x, sliceAnsi as y, findExecutable as z };
-//# sourceMappingURL=session-binding-CP2KyZi4.mjs.map
+export { readLatestLoggedRateLimits as A, shellCommand as B, waitForNewRootSession as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, snapshotRootSessions as S, writeSessionBinding as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as _, resizeCmuxPane as a, findRootSessionById as b, renderHud as c, sliceAnsi as d, loadConfig as f, DEFAULT_CONFIG as g, rawConfigVersion as h, readCmuxPaneGeometry as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, truncateAnsi as l, applyConfigMigrations as m, desiredPaneHeight as n, resizeHudPane as o, reloadConfig as p, resolveProcessSession as q, hudRenderHeight as r, settleCmuxPaneHeight as s, buildHudState as t, visibleWidth as u, acquireSessionDiscoveryLock as v, waitForRootSessionById as w, readSessionBinding as x, createSessionBindingPath as y, findExecutable as z };
+//# sourceMappingURL=state-DNUFmlg2.mjs.map

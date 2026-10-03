@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readLatestLoggedRateLimits, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, J as resolveSessionEndpoint, K as resolveProcessEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, P as readCachedAccountUsage, R as HUD_VERSION, _ as truncateAnsi, b as loadConfig, c as writeSessionBinding, d as hudRenderHeight, f as readCmuxPaneGeometry, g as renderHud, h as settleCmuxPaneHeight, i as readSessionBinding, j as readCachedConfiguredExternalUsage, k as persistRolloutRateLimits, l as buildHudState, m as resizeHudPane, p as resizeCmuxPane, q as resolveProcessSession, u as desiredPaneHeight, v as visibleWidth, x as reloadConfig, y as sliceAnsi } from "./session-binding-CP2KyZi4.mjs";
+import { A as readLatestLoggedRateLimits, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, J as resolveSessionEndpoint, K as resolveProcessEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, P as readCachedAccountUsage, R as HUD_VERSION, T as writeSessionBinding, a as resizeCmuxPane, c as renderHud, d as sliceAnsi, f as loadConfig, i as readCmuxPaneGeometry, j as readCachedConfiguredExternalUsage, k as persistRolloutRateLimits, l as truncateAnsi, n as desiredPaneHeight, o as resizeHudPane, p as reloadConfig, q as resolveProcessSession, r as hudRenderHeight, s as settleCmuxPaneHeight, t as buildHudState, u as visibleWidth, x as readSessionBinding } from "./state-DNUFmlg2.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -504,19 +504,19 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			sessionWatcher?.close();
 			sessionWatcher = null;
 		}
-		if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
+		if (!options.sessionPath && (options.sessionBindingPath || !currentSessionPath) && nowMs - lastDiscoveryAt >= 250) {
 			lastDiscoveryAt = nowMs;
 			const binding = options.sessionBindingPath ? readSessionBinding(options.sessionBindingPath) : null;
 			codexPid = binding?.codexPid ?? codexPid;
 			let bound = binding?.rolloutPath ?? null;
-			if (!bound && options.sessionBindingPath && codexPid) {
+			if (!bound && !currentSessionPath && options.sessionBindingPath && codexPid) {
 				const processSession = resolveProcessSession(codexPid, options.cwd, options.launchedAfter ?? startedAt);
 				if (processSession) {
 					bound = processSession.rolloutPath;
 					writeSessionBinding(options.sessionBindingPath, bound, codexPid);
 				}
 			}
-			const discovered = bound ? { path: bound } : options.sessionBindingPath ? null : findActiveSession({
+			const discovered = bound ? { path: bound } : options.sessionBindingPath ? currentSessionPath ? { path: currentSessionPath } : null : findActiveSession({
 				cwd: options.cwd,
 				launchedAfter: options.launchedAfter,
 				allowModifiedBeforeLaunch: options.allowModifiedSession

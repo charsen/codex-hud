@@ -371,6 +371,12 @@ codex-hud hud-version
 
 常见情况：
 
+HUD 停留在旧会话时，确认该 HUD renderer 的绑定文件，再执行
+`codex-hud bind --session-binding <绑定文件> --session-id <主会话UUID> --cwd <项目目录>`。
+从 Codex 工具调用时，省略 `--session-id` 会使用 `CODEX_THREAD_ID`。
+运行中的 HUD 会跟随绑定更新，无需重启 Codex，也不会影响其他面板。
+共享 app-server 不能仅靠目录确认会话归属，因此修复必须使用明确的主会话 ID。
+
 | 现象                           | 处理方法                                      |
 | ------------------------------ | --------------------------------------------- |
 | setup 成功，但当前会话没有 HUD | 退出当前 Codex，运行`hash -r`，再启动 `codex` |
