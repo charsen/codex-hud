@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.9 - 2026-10-09
+
+### Fixed
+
+- Discover delayed session rollouts written by managed app-server descendants beyond the direct Codex child process. Keep process inspection bounded and reject ambiguous root threads instead of attaching a concurrent conversation.
+
+---
+
+### 修复
+
+- 沿 Codex 后代进程发现 managed app-server 延迟写入的会话记录，避免 HUD 只显示项目与计时；限制进程扫描范围，并在多个根会话归属不明确时拒绝猜测绑定，防止误接并行会话。
+
 ## 0.10.8 - 2026-10-03
 
 ### Fixed

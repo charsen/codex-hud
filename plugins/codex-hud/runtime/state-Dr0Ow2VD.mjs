@@ -1007,11 +1007,12 @@ function processRange(pid) {
 	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
 }
 /**
-* Codex runs behind an npm wrapper script, so the process that logs is a child
-* of the one the launcher spawned.
+* npm wrappers and managed app-server daemons can put the log writer several
+* generations below the launcher. Read one bounded snapshot and follow only
+* descendants; cwd alone cannot distinguish concurrent Codex sessions.
 */
 function processFamily(pid) {
-	const result = spawnSync("pgrep", ["-P", String(pid)], {
+	const result = spawnSync("ps", ["-axo", "pid=,ppid="], {
 		encoding: "utf8",
 		stdio: [
 			"ignore",
@@ -1020,7 +1021,24 @@ function processFamily(pid) {
 		],
 		timeout: QUERY_TIMEOUT_MS$1
 	});
-	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
+	if (result.status !== 0 || typeof result.stdout !== "string") return [pid];
+	const children = /* @__PURE__ */ new Map();
+	for (const line of result.stdout.split("\n")) {
+		const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+		if (!match) continue;
+		const child = Number(match[1]);
+		const parent = Number(match[2]);
+		if (!Number.isSafeInteger(child) || child <= 0 || !Number.isSafeInteger(parent)) continue;
+		const siblings = children.get(parent) ?? [];
+		siblings.push(child);
+		children.set(parent, siblings);
+	}
+	const family = /* @__PURE__ */ new Set([pid]);
+	for (const parent of family) for (const child of children.get(parent) ?? []) {
+		family.add(child);
+		if (family.size > 256) return [pid];
+	}
+	return [...family];
 }
 function shellSql(value) {
 	return value.replaceAll("'", "''");
@@ -1064,8 +1082,9 @@ function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Da
 		"   AND (thread_source = 'user' OR thread_source IS NULL)",
 		"   AND (agent_path IS NULL OR agent_path = '')",
 		" ORDER BY created_at_ms ASC, id ASC",
-		" LIMIT 1;"
+		" LIMIT 2;"
 	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
+	if (rows.filter((row) => row.includes("|")).length !== 1) return remember(null);
 	for (const row of rows) {
 		const separator = row.indexOf("|");
 		if (separator < 0) continue;
@@ -1460,7 +1479,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.10.8";
+var version = "0.10.9";
 
 //#endregion
 //#region src/version.ts
@@ -6882,4 +6901,4 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 
 //#endregion
 export { readLatestLoggedRateLimits as A, shellCommand as B, waitForNewRootSession as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, snapshotRootSessions as S, writeSessionBinding as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as _, resizeCmuxPane as a, findRootSessionById as b, renderHud as c, sliceAnsi as d, loadConfig as f, DEFAULT_CONFIG as g, rawConfigVersion as h, readCmuxPaneGeometry as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, truncateAnsi as l, applyConfigMigrations as m, desiredPaneHeight as n, resizeHudPane as o, reloadConfig as p, resolveProcessSession as q, hudRenderHeight as r, settleCmuxPaneHeight as s, buildHudState as t, visibleWidth as u, acquireSessionDiscoveryLock as v, waitForRootSessionById as w, readSessionBinding as x, createSessionBindingPath as y, findExecutable as z };
-//# sourceMappingURL=state-DNUFmlg2.mjs.map
+//# sourceMappingURL=state-Dr0Ow2VD.mjs.map

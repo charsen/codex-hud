@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Discover delayed managed app-server rollouts through descendant processes, with concurrent-thread isolation and bounded process inspection.
+
 - [x] Repair the current stale session binding and make running renderers follow explicit binding updates without borrowing concurrent threads.
 - [x] Recognize successful WebSocket endpoint observations and restore this session's trusted ChatGPT quota display.
 
