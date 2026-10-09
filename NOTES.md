@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-10-09
+
+- Symptom: a HUD remains unbound when the first message creates a rollout minutes after launch. Cause: the managed app-server writes logs below the npm wrapper and native Codex process, while process lookup inspected only direct children. Fix: inspect a single bounded PID/PPID snapshot and follow descendants; reject ambiguous root threads instead of selecting one from a shared server. The startup time window remains bounded to avoid borrowing neighboring launches.
+
 ## 2026-10-03
 
 - Symptom: a long-running HUD displays an older conversation after the active root thread changes. Cause: the renderer reads its binding only before the first rollout is attached; shared app-server threads cannot be attributed to the TUI by process logs. Fix: reread explicit binding updates during rendering and use `bind` with the confirmed root ID, preserving the Codex process and refusing foreign-project/subagent targets.
