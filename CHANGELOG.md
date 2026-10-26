@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.10 - 2026-10-26
+
+### Fixed
+
+- Recover uniquely attributable slow-start root sessions after a bounded grace period. Refuse roots claimed by another HUD and stop guessing after overlapping unresolved launches, preserving the original discovery lock duration.
+
+---
+
+### 修复
+
+- 在有界宽限期后恢复可唯一归属的慢启动主会话；拒绝绑定其他 HUD 已占用的会话，发现多个未绑定窗口重叠启动后停止猜测，并保留原有发现锁时长。
+
 ## 0.10.9 - 2026-10-09
 
 ### Fixed
