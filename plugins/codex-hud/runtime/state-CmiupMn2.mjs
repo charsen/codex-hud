@@ -1479,7 +1479,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.10.9";
+var version = "0.10.10";
 
 //#endregion
 //#region src/version.ts
@@ -6935,4 +6935,4 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 
 //#endregion
 export { getConfigPath as $, RolloutParser as A, evaluateUsageTrust as B, readSessionBinding as C, waitForRootSessionById as D, waitForNewRootSession as E, readConfiguredExternalUsage as F, hasTrustedOpenAiAuth as G, findExecutable as H, resolveUsageData as I, isOfficialOpenAIEndpoint as J, findCodexLogDatabase as K, readCachedAccountUsage as L, persistRolloutRateLimits as M, readLatestLoggedRateLimits as N, writeSessionBinding as O, readCachedConfiguredExternalUsage as P, getCodexHome as Q, refreshAccountUsage as R, findRootSessionById as S, snapshotRootSessions as T, shellCommand as U, HUD_VERSION as V, shellQuote as W, resolveProcessSession as X, resolveProcessEndpoint as Y, resolveSessionEndpoint as Z, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as _, resizeCmuxPane as a, createSessionBindingPath as b, renderHud as c, sliceAnsi as d, getHudStateDirectory as et, loadConfig as f, DEFAULT_CONFIG as g, rawConfigVersion as h, readCmuxPaneGeometry as i, inspectLoggedRateLimitTargets as j, findActiveSession as k, truncateAnsi as l, applyConfigMigrations as m, desiredPaneHeight as n, resizeHudPane as o, reloadConfig as p, inspectCodexLogSchema as q, hudRenderHeight as r, settleCmuxPaneHeight as s, buildHudState as t, getLegacyStateDirectory as tt, visibleWidth as u, LATE_DISCOVERY_GRACE_MS as v, sessionClaimGuard as w, findLateRootSession as x, acquireSessionDiscoveryLock as y, selectAccountUsage as z };
-//# sourceMappingURL=state-BG3lxRl2.mjs.map
+//# sourceMappingURL=state-CmiupMn2.mjs.map
