@@ -1,5 +1,7 @@
 # TODOs
 
+- [x] Recover uniquely attributable slow-start threads after the initial discovery window while refusing claimed roots and overlapping unresolved launches.
+
 - [x] Discover delayed managed app-server rollouts through descendant processes, with concurrent-thread isolation and bounded process inspection.
 
 - [x] Repair the current stale session binding and make running renderers follow explicit binding updates without borrowing concurrent threads.

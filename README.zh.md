@@ -373,6 +373,10 @@ codex-hud hud-version
 
 HUD 停留在旧会话时，确认该 HUD renderer 的绑定文件，再执行
 `codex-hud bind --session-binding <绑定文件> --session-id <主会话UUID> --cwd <项目目录>`。
+
+启动较慢时，未绑定的启动器会在额外二十秒宽限期后检查唯一的新主会话。
+已被其他 HUD 占用的会话不会被借用；发现多个尚未绑定的窗口同时启动后，
+会继续要求进程归属证据或显式绑定，不再猜测。原有十秒发现锁不会延长。
 从 Codex 工具调用时，省略 `--session-id` 会使用 `CODEX_THREAD_ID`。
 运行中的 HUD 会跟随绑定更新，无需重启 Codex，也不会影响其他面板。
 共享 app-server 不能仅靠目录确认会话归属，因此修复必须使用明确的主会话 ID。

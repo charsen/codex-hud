@@ -3,9 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createSessionBindingPath,
+  findLateRootSession,
   findNewRootSession,
   findRootSessionById,
   readSessionBinding,
+  sessionClaimGuard,
   snapshotRootSessions,
   waitForNewRootSession,
   waitForRootSessionById,
@@ -31,6 +34,72 @@ afterEach(() => {
 })
 
 describe('managed session binding', () => {
+  it('recovers one late root but refuses ambiguous or out-of-window roots', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-late-binding-'))
+    directories.push(home)
+    const cwd = path.join(home, 'project')
+    fs.mkdirSync(cwd)
+    writeSession(home, 'old', cwd, '2026-07-17T00:59:00Z')
+    const snapshot = snapshotRootSessions(cwd, home)
+    const window = { after: Date.parse('2026-07-17T01:00:00Z'), before: Date.parse('2026-07-17T01:00:30Z') }
+    writeSession(home, 'too-late', cwd, '2026-07-17T01:00:31Z')
+    const owned = writeSession(home, 'owned', cwd, '2026-07-17T01:00:11Z')
+    expect(findLateRootSession(cwd, snapshot, home, window)?.path).toBe(owned)
+    writeSession(home, 'ambiguous', cwd, '2026-07-17T01:00:12Z')
+    expect(findLateRootSession(cwd, snapshot, home, window)).toBeNull()
+  })
+
+  it('never guesses after overlapping unresolved launches, even if the other window exits', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-claim-binding-'))
+    directories.push(home)
+    const cwd = path.join(home, 'project')
+    const env = { CODEX_HOME: home }
+    const own = createSessionBindingPath(cwd, env)
+    writeSessionBinding(own, null, process.pid)
+    const guard = sessionClaimGuard(cwd, own, env)
+    expect(guard()).toBe(true)
+    const otherProject = createSessionBindingPath(path.join(home, 'other'), env)
+    writeSessionBinding(otherProject, null, process.pid)
+    expect(guard()).toBe(true)
+    const other = createSessionBindingPath(cwd, env)
+    writeSessionBinding(other, null, process.pid)
+    expect(guard()).toBe(false)
+    fs.rmSync(other)
+    expect(guard()).toBe(false)
+    fs.rmSync(path.dirname(own), { recursive: true })
+    expect(guard()).toBe(false)
+  })
+
+  it('does not borrow a root already bound to another window', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-claimed-root-'))
+    directories.push(home)
+    const cwd = path.join(home, 'project')
+    fs.mkdirSync(cwd)
+    const env = { CODEX_HOME: home }
+    const own = createSessionBindingPath(cwd, env)
+    const other = createSessionBindingPath(cwd, env)
+    const rollout = writeSession(home, 'claimed', cwd, '2026-07-17T01:00:11Z')
+    writeSessionBinding(own, null, process.pid)
+    writeSessionBinding(other, rollout, process.pid)
+    const guard = sessionClaimGuard(cwd, own, env)
+    expect(guard()).toBe(true)
+    expect(guard(rollout)).toBe(false)
+  })
+
+  it('observes competing launches even before metadata exists', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-empty-discovery-'))
+    directories.push(home)
+    const controller = new AbortController()
+    let observed = false
+    expect(await waitForNewRootSession(home, new Map(), home, 1000, controller.signal, false, undefined, (candidate) => {
+      expect(candidate).toBeUndefined()
+      observed = true
+      controller.abort()
+      return false
+    })).toBeNull()
+    expect(observed).toBe(true)
+  })
+
   it('selects only the root session created after the launch snapshot', () => {
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-'))
     directories.push(codexHome)

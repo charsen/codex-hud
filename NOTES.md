@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-10-26
+
+- Symptom: a HUD shows only the project and elapsed time when a shared app-server first creates its thread about eleven seconds after launch. Cause: the thread timestamp falls outside the ten-second discovery window, and the TUI's logs do not identify the shared-server thread. Fix: retain the original discovery boundary, then allow a unique late root within an additional twenty-second grace period; reject roots claimed by other windows and permanently stop guessing after overlapping unresolved launches. Existing affected windows can be repaired with an explicit `bind` without restarting Codex.
+
 ## 2026-10-09
 
 - Symptom: a HUD remains unbound when the first message creates a rollout minutes after launch. Cause: the managed app-server writes logs below the npm wrapper and native Codex process, while process lookup inspected only direct children. Fix: inspect a single bounded PID/PPID snapshot and follow descendants; reject ambiguous root threads instead of selecting one from a shared server. The startup time window remains bounded to avoid borrowing neighboring launches.

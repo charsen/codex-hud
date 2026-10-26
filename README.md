@@ -377,6 +377,10 @@ When invoked by a Codex tool, `--session-id` defaults to `CODEX_THREAD_ID`.
 Use the binding file passed to that HUD pane's renderer; other panes are unaffected.
 Running renderers follow binding updates without restarting Codex. Shared app-server
 threads cannot be attributed by cwd alone, so this command requires an exact root ID.
+For slow startup, an unbound launcher also checks for a unique new root after an
+additional twenty-second grace period. It never borrows a root claimed by another
+HUD, and overlapping unresolved launches require process evidence or explicit
+binding. The original ten-second discovery lock is not extended.
 
 | Symptom                                             | Fix                                                       |
 | --------------------------------------------------- | --------------------------------------------------------- |

@@ -18,7 +18,10 @@ import { findExecutable } from './process.js'
 import {
   acquireSessionDiscoveryLock,
   createSessionBindingPath,
+  findLateRootSession,
   findRootSessionById,
+  LATE_DISCOVERY_GRACE_MS,
+  sessionClaimGuard,
   snapshotRootSessions,
   waitForNewRootSession,
   waitForRootSessionById,
@@ -374,6 +377,7 @@ export async function runCodexChild(
     }
   }
   if (bindingPath && snapshot && release) {
+    const canClaim = allowModifiedSession ? undefined : sessionClaimGuard(cwd, bindingPath, env)
     let rolloutPath: string | null = null
     let discoveryEndedAt = childStartedAt
     try {
@@ -387,6 +391,7 @@ export async function runCodexChild(
         discoveryController.signal,
         allowModifiedSession,
         allowModifiedSession ? undefined : { after: childStartedAt, before: Number.POSITIVE_INFINITY },
+        canClaim,
       )
       if (!rolloutPath && childExited) {
         rolloutPath = await waitForNewRootSession(
@@ -397,6 +402,7 @@ export async function runCodexChild(
           undefined,
           allowModifiedSession,
           allowModifiedSession ? undefined : { after: childStartedAt, before: Number.POSITIVE_INFINITY },
+          canClaim,
         )
       }
       if (rolloutPath) {
@@ -422,7 +428,16 @@ export async function runCodexChild(
         discoveryController.signal,
         false,
         { after: childStartedAt, before: discoveryEndedAt },
+        canClaim,
       )
+      if (!rolloutPath && !childExited && Date.now() >= discoveryEndedAt + LATE_DISCOVERY_GRACE_MS) {
+        const late = findLateRootSession(cwd, snapshot, codexHome, {
+          after: childStartedAt,
+          before: discoveryEndedAt + LATE_DISCOVERY_GRACE_MS,
+        })
+        if (late && canClaim?.(late.path))
+          rolloutPath = late.path
+      }
       if (rolloutPath) {
         writeSessionBinding(bindingPath, rolloutPath, child.pid)
       }
