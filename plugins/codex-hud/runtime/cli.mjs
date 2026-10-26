@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as readLatestLoggedRateLimits, B as shellCommand, C as waitForNewRootSession, D as RolloutParser, E as findActiveSession, F as refreshAccountUsage, G as isOfficialOpenAIEndpoint, H as hasTrustedOpenAiAuth, I as selectAccountUsage, J as resolveSessionEndpoint, L as evaluateUsageTrust, M as readConfiguredExternalUsage, N as resolveUsageData, O as inspectLoggedRateLimitTargets, Q as getLegacyStateDirectory, R as HUD_VERSION, S as snapshotRootSessions, T as writeSessionBinding, U as findCodexLogDatabase, V as shellQuote, W as inspectCodexLogSchema, X as getConfigPath, Y as getCodexHome, Z as getHudStateDirectory, _ as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, b as findRootSessionById, c as renderHud, f as loadConfig, g as DEFAULT_CONFIG, h as rawConfigVersion, k as persistRolloutRateLimits, m as applyConfigMigrations, t as buildHudState, v as acquireSessionDiscoveryLock, w as waitForRootSessionById, x as readSessionBinding, y as createSessionBindingPath, z as findExecutable } from "./state-Dr0Ow2VD.mjs";
+import { $ as getConfigPath, A as RolloutParser, B as evaluateUsageTrust, C as readSessionBinding, D as waitForRootSessionById, E as waitForNewRootSession, F as readConfiguredExternalUsage, G as hasTrustedOpenAiAuth, H as findExecutable, I as resolveUsageData, J as isOfficialOpenAIEndpoint, K as findCodexLogDatabase, M as persistRolloutRateLimits, N as readLatestLoggedRateLimits, O as writeSessionBinding, Q as getCodexHome, R as refreshAccountUsage, S as findRootSessionById, T as snapshotRootSessions, U as shellCommand, V as HUD_VERSION, W as shellQuote, Z as resolveSessionEndpoint, _ as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, b as createSessionBindingPath, c as renderHud, et as getHudStateDirectory, f as loadConfig, g as DEFAULT_CONFIG, h as rawConfigVersion, j as inspectLoggedRateLimitTargets, k as findActiveSession, m as applyConfigMigrations, q as inspectCodexLogSchema, t as buildHudState, tt as getLegacyStateDirectory, v as LATE_DISCOVERY_GRACE_MS, w as sessionClaimGuard, x as findLateRootSession, y as acquireSessionDiscoveryLock, z as selectAccountUsage } from "./state-BG3lxRl2.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -2916,17 +2916,18 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
 	}
 	if (bindingPath && snapshot && release) {
+		const canClaim = allowModifiedSession ? void 0 : sessionClaimGuard(cwd, bindingPath, env);
 		let rolloutPath = null;
 		let discoveryEndedAt = childStartedAt;
 		try {
 			rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e4, discoveryController.signal, allowModifiedSession, allowModifiedSession ? void 0 : {
 				after: childStartedAt,
 				before: Number.POSITIVE_INFINITY
-			});
+			}, canClaim);
 			if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession, allowModifiedSession ? void 0 : {
 				after: childStartedAt,
 				before: Number.POSITIVE_INFINITY
-			});
+			}, canClaim);
 			if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
 		} finally {
 			discoveryEndedAt = Date.now();
@@ -2937,7 +2938,14 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 			rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 1e3, discoveryController.signal, false, {
 				after: childStartedAt,
 				before: discoveryEndedAt
-			});
+			}, canClaim);
+			if (!rolloutPath && !childExited && Date.now() >= discoveryEndedAt + 2e4) {
+				const late = findLateRootSession(cwd, snapshot, codexHome, {
+					after: childStartedAt,
+					before: discoveryEndedAt + LATE_DISCOVERY_GRACE_MS
+				});
+				if (late && canClaim?.(late.path)) rolloutPath = late.path;
+			}
 			if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
 		}
 	}

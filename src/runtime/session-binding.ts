@@ -7,6 +7,7 @@ import { isSubagentSource, listSessionCandidates } from '../codex/session-finder
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 
 const DISCOVERY_TIMEOUT_MS = 10_000
+export const LATE_DISCOVERY_GRACE_MS = 20_000
 const LOCK_STALE_MS = 30_000
 
 function normalizedPath(value: string): string {
@@ -120,6 +121,52 @@ export function readSessionBinding(bindingPath: string): SessionBinding {
   }
 }
 
+/** Observe other managed windows without using cwd as proof of ownership. */
+export function sessionClaimGuard(cwd: string, bindingPath: string, env: NodeJS.ProcessEnv = process.env): (rolloutPath?: string) => boolean {
+  const directory = path.join(getHudStateDirectory(env), 'bindings')
+  const prefix = `${createHash('sha1').update(normalizedPath(cwd)).digest('hex').slice(0, 12)}-`
+  let competingLaunchObserved = false
+  return (rolloutPath) => {
+    let entries: string[]
+    try {
+      entries = fs.readdirSync(directory).filter(name => name.startsWith(prefix) && name.endsWith('.json'))
+    }
+    catch (error) {
+      return !competingLaunchObserved && (error as NodeJS.ErrnoException).code === 'ENOENT'
+    }
+    let claimedByOther = false
+    for (const entry of entries) {
+      const otherPath = path.join(directory, entry)
+      if (path.resolve(otherPath) === path.resolve(bindingPath))
+        continue
+      const other = readSessionBinding(otherPath)
+      if (rolloutPath && other.rolloutPath && normalizedPath(other.rolloutPath) === normalizedPath(rolloutPath))
+        claimedByOther = true
+      if (!other.rolloutPath && other.codexPid && other.codexPid > 0) {
+        try {
+          process.kill(other.codexPid, 0)
+          competingLaunchObserved = true
+        }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+            competingLaunchObserved = true
+        }
+      }
+    }
+    // Once two unresolved launches overlap, later completion/death cannot prove
+    // which one created a thread. Require process evidence or an explicit bind.
+    return !competingLaunchObserved && !claimedByOther
+  }
+}
+
+/** Late metadata is usable only after a bounded grace period and when unique. */
+export function findLateRootSession(cwd: string, snapshot: SessionSnapshot, codexHome: string, window: SessionStartWindow) {
+  const candidates = rootSessions(cwd, codexHome).filter(candidate => !snapshot.has(candidate.path)
+    && candidate.startTime.getTime() >= window.after
+    && candidate.startTime.getTime() < window.before)
+  return candidates.length === 1 ? candidates[0] : null
+}
+
 function lockPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   const digest = createHash('sha1').update(normalizedPath(cwd)).digest('hex')
   return path.join(getHudStateDirectory(env), 'bindings', 'locks', digest)
@@ -178,6 +225,7 @@ export async function waitForNewRootSession(
   signal?: AbortSignal,
   allowModified = false,
   startWindow?: SessionStartWindow,
+  canClaim?: (rolloutPath?: string) => boolean,
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs
   do {
@@ -185,7 +233,7 @@ export async function waitForNewRootSession(
       return null
     }
     const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow)
-    if (session) {
+    if ((canClaim?.(session?.path) ?? true) && session) {
       return session.path
     }
     await delay(startWindow ? 250 : 25, signal)

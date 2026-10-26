@@ -378,4 +378,32 @@ describe('non-interfering launcher', () => {
     process.env.CODEX_HUD_CODEX_BIN = codex
     expect(await runCodexChild([], null, false, cwd, bindingPath)).toBe(29)
   })
+
+  it('recovers a unique thread first created eleven seconds after startup', async () => {
+    const { cwd, env } = fixture()
+    const sessions = path.join(env.CODEX_HOME!, 'sessions')
+    fs.mkdirSync(sessions, { recursive: true })
+    const bindingPath = path.join(cwd, 'binding.json')
+    const rolloutPath = path.join(sessions, 'rollout-slow-start.jsonl')
+    const { codex, finish } = controlledChild(cwd, `
+      setTimeout(() => fs.writeFileSync(${JSON.stringify(rolloutPath)}, JSON.stringify({
+        type: 'session_meta', payload: { id: 'slow-start', timestamp: new Date().toISOString(), cwd: ${JSON.stringify(cwd)}, source: 'vscode', thread_source: 'user' }
+      }) + '\\n'), 11_000);
+    `)
+    env.CODEX_HUD_CODEX_BIN = codex
+    const child = runCodexChild([], null, false, cwd, bindingPath, env)
+    try {
+      await waitFor(() => fs.existsSync(rolloutPath), 15_000)
+      // The original ten-second window is not widened to immediately borrow a
+      // late thread: finish the grace period before checking uniqueness.
+      expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
+      await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null, 25_000)
+      expect(readSessionBinding(bindingPath).rolloutPath).toBe(rolloutPath)
+    }
+    finally {
+      finish()
+      expect(await child).toBe(17)
+    }
+    expect(fs.existsSync(bindingPath)).toBe(false)
+  }, 40_000)
 })

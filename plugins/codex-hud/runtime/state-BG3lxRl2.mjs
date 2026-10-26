@@ -3229,6 +3229,7 @@ function findActiveSession(options) {
 //#endregion
 //#region src/runtime/session-binding.ts
 const DISCOVERY_TIMEOUT_MS = 1e4;
+const LATE_DISCOVERY_GRACE_MS = 2e4;
 const LOCK_STALE_MS = 3e4;
 function normalizedPath(value) {
 	let resolved;
@@ -3299,6 +3300,39 @@ function readSessionBinding(bindingPath) {
 		};
 	}
 }
+/** Observe other managed windows without using cwd as proof of ownership. */
+function sessionClaimGuard(cwd, bindingPath, env = process.env) {
+	const directory = path.join(getHudStateDirectory(env), "bindings");
+	const prefix = `${createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12)}-`;
+	let competingLaunchObserved = false;
+	return (rolloutPath) => {
+		let entries;
+		try {
+			entries = fs.readdirSync(directory).filter((name) => name.startsWith(prefix) && name.endsWith(".json"));
+		} catch (error) {
+			return !competingLaunchObserved && error.code === "ENOENT";
+		}
+		let claimedByOther = false;
+		for (const entry of entries) {
+			const otherPath = path.join(directory, entry);
+			if (path.resolve(otherPath) === path.resolve(bindingPath)) continue;
+			const other = readSessionBinding(otherPath);
+			if (rolloutPath && other.rolloutPath && normalizedPath(other.rolloutPath) === normalizedPath(rolloutPath)) claimedByOther = true;
+			if (!other.rolloutPath && other.codexPid && other.codexPid > 0) try {
+				process.kill(other.codexPid, 0);
+				competingLaunchObserved = true;
+			} catch (error) {
+				if (error.code !== "ESRCH") competingLaunchObserved = true;
+			}
+		}
+		return !competingLaunchObserved && !claimedByOther;
+	};
+}
+/** Late metadata is usable only after a bounded grace period and when unique. */
+function findLateRootSession(cwd, snapshot, codexHome, window) {
+	const candidates = rootSessions(cwd, codexHome).filter((candidate) => !snapshot.has(candidate.path) && candidate.startTime.getTime() >= window.after && candidate.startTime.getTime() < window.before);
+	return candidates.length === 1 ? candidates[0] : null;
+}
 function lockPath(cwd, env = process.env) {
 	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
 	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
@@ -3344,12 +3378,12 @@ async function acquireSessionDiscoveryLock(cwd, env = process.env) {
 		await delay(25);
 	}
 }
-async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow) {
+async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), timeoutMs = DISCOVERY_TIMEOUT_MS, signal, allowModified = false, startWindow, canClaim) {
 	const deadline = Date.now() + timeoutMs;
 	do {
 		if (signal?.aborted) return null;
 		const session = findNewRootSession(cwd, snapshot, codexHome, allowModified, startWindow);
-		if (session) return session.path;
+		if ((canClaim?.(session?.path) ?? true) && session) return session.path;
 		await delay(startWindow ? 250 : 25, signal);
 	} while (Date.now() < deadline);
 	return null;
@@ -6900,5 +6934,5 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 }
 
 //#endregion
-export { readLatestLoggedRateLimits as A, shellCommand as B, waitForNewRootSession as C, RolloutParser as D, findActiveSession as E, refreshAccountUsage as F, isOfficialOpenAIEndpoint as G, hasTrustedOpenAiAuth as H, selectAccountUsage as I, resolveSessionEndpoint as J, resolveProcessEndpoint as K, evaluateUsageTrust as L, readConfiguredExternalUsage as M, resolveUsageData as N, inspectLoggedRateLimitTargets as O, readCachedAccountUsage as P, getLegacyStateDirectory as Q, HUD_VERSION as R, snapshotRootSessions as S, writeSessionBinding as T, findCodexLogDatabase as U, shellQuote as V, inspectCodexLogSchema as W, getConfigPath as X, getCodexHome as Y, getHudStateDirectory as Z, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as _, resizeCmuxPane as a, findRootSessionById as b, renderHud as c, sliceAnsi as d, loadConfig as f, DEFAULT_CONFIG as g, rawConfigVersion as h, readCmuxPaneGeometry as i, readCachedConfiguredExternalUsage as j, persistRolloutRateLimits as k, truncateAnsi as l, applyConfigMigrations as m, desiredPaneHeight as n, resizeHudPane as o, reloadConfig as p, resolveProcessSession as q, hudRenderHeight as r, settleCmuxPaneHeight as s, buildHudState as t, visibleWidth as u, acquireSessionDiscoveryLock as v, waitForRootSessionById as w, readSessionBinding as x, createSessionBindingPath as y, findExecutable as z };
-//# sourceMappingURL=state-Dr0Ow2VD.mjs.map
+export { getConfigPath as $, RolloutParser as A, evaluateUsageTrust as B, readSessionBinding as C, waitForRootSessionById as D, waitForNewRootSession as E, readConfiguredExternalUsage as F, hasTrustedOpenAiAuth as G, findExecutable as H, resolveUsageData as I, isOfficialOpenAIEndpoint as J, findCodexLogDatabase as K, readCachedAccountUsage as L, persistRolloutRateLimits as M, readLatestLoggedRateLimits as N, writeSessionBinding as O, readCachedConfiguredExternalUsage as P, getCodexHome as Q, refreshAccountUsage as R, findRootSessionById as S, snapshotRootSessions as T, shellCommand as U, HUD_VERSION as V, shellQuote as W, resolveProcessSession as X, resolveProcessEndpoint as Y, resolveSessionEndpoint as Z, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as _, resizeCmuxPane as a, createSessionBindingPath as b, renderHud as c, sliceAnsi as d, getHudStateDirectory as et, loadConfig as f, DEFAULT_CONFIG as g, rawConfigVersion as h, readCmuxPaneGeometry as i, inspectLoggedRateLimitTargets as j, findActiveSession as k, truncateAnsi as l, applyConfigMigrations as m, desiredPaneHeight as n, resizeHudPane as o, reloadConfig as p, inspectCodexLogSchema as q, hudRenderHeight as r, settleCmuxPaneHeight as s, buildHudState as t, getLegacyStateDirectory as tt, visibleWidth as u, LATE_DISCOVERY_GRACE_MS as v, sessionClaimGuard as w, findLateRootSession as x, acquireSessionDiscoveryLock as y, selectAccountUsage as z };
+//# sourceMappingURL=state-BG3lxRl2.mjs.map
